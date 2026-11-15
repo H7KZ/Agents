@@ -1,4 +1,5 @@
 import type { Simple } from './command.ts';
+import { expandBraces } from './braces.ts';
 import { ask, block, type Ctx, type Decision } from './types.ts';
 
 const DELETERS = new Set(['rm', 'remove-item', 'ri', 'del', 'erase', 'rd', 'rmdir']);
@@ -94,9 +95,9 @@ function classify(resolved: string, ctx: Ctx, root: string, home: string): Kind 
   return null;
 }
 
-function checkTarget(word: string, cwd: string, ctx: Ctx, root: string, home: string): string | null {
+function checkWord(word: string, cwd: string, ctx: Ctx, root: string, home: string): string | null {
   const expanded = ctx.paths.expand(word, ctx.home);
-  if (expanded === null) return 'it uses an unexpanded variable or command substitution';
+  if (expanded === null) return UNRESOLVED;
   const glob = /[*?[]/.exec(expanded);
   if (!glob) {
     const kind = classify(ctx.paths.resolve(cwd, expanded), ctx, root, home);
@@ -111,20 +112,31 @@ function checkTarget(word: string, cwd: string, ctx: Ctx, root: string, home: st
   return kind === null ? null : `the glob is in ${KIND_TEXT[kind]}`;
 }
 
+const UNRESOLVED = 'it uses an unexpanded variable or command substitution';
+const TOO_MANY = 'it has too many brace alternatives to check';
+
+function problems(word: string, cwd: string, ctx: Ctx, root: string, home: string): string[] {
+  const variants = expandBraces(word);
+  if (variants === null) return [TOO_MANY];
+  return variants.flatMap((variant) => checkWord(variant, cwd, ctx, root, home) ?? []);
+}
+
 export function evaluateDelete(simple: Simple, cwd: string, ctx: Ctx): Decision | null {
   const flags = parseDeleteArgs(simple.name, simple.argv);
   const wipes = CMD_RECURSIVE_ALONE.has(simple.name) ? flags.cmdRecursive || (flags.recursive && flags.force) : flags.recursive && flags.force;
   if (!wipes) return null;
   const root = ctx.paths.resolve(ctx.cwd, ctx.git.repoRoot(ctx.cwd) ?? ctx.cwd);
   const home = ctx.paths.resolve(ctx.cwd, ctx.home);
+  let unresolved: Decision | null = null;
   for (const target of flags.targets) {
-    const why = checkTarget(target, cwd, ctx, root, home);
-    if (why === null) continue;
-    const reason = `Recursive delete of "${target}" refused: ${why}.`;
-    if (why.startsWith('it uses')) {
-      return ask('recursive-delete-unresolved', `${reason} Use a literal path inside the repository, e.g. rm -rf dist.`);
+    for (const why of problems(target, cwd, ctx, root, home)) {
+      const reason = `Recursive delete of "${target}" refused: ${why}.`;
+      if (why === UNRESOLVED || why === TOO_MANY) {
+        unresolved ??= ask('recursive-delete-unresolved', `${reason} Use a literal path inside the repository, e.g. rm -rf dist.`);
+      } else {
+        return block('recursive-delete', `${reason} Delete only specific paths inside the repository (e.g. rm -rf node_modules dist), or ask the user to run it.`);
+      }
     }
-    return block('recursive-delete', `${reason} Delete only specific paths inside the repository (e.g. rm -rf node_modules dist), or ask the user to run it.`);
   }
-  return null;
+  return unresolved;
 }
