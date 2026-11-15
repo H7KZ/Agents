@@ -2,6 +2,9 @@ const NUMERIC = /^(-?\d+)\.\.(-?\d+)(?:\.\.(-?\d+))?$/;
 const ALPHA = /^([a-zA-Z])\.\.([a-zA-Z])$/;
 
 export const MAX_EXPANSIONS = 256;
+export const MAX_WORD_LENGTH = 1024;
+export const MAX_GROUPS = 16;
+const MAX_DIGITS = 9;
 
 function matchingClose(word: string, open: number): number {
   let depth = 0;
@@ -31,15 +34,25 @@ function splitTopLevel(body: string): string[] {
   return parts;
 }
 
+function boundedInteger(text: string | undefined, fallback: number): number | null {
+  if (text === undefined) return fallback;
+  if (text.replace('-', '').length > MAX_DIGITS) return null;
+  return Number(text);
+}
+
 function sequence(body: string): string[] | null | undefined {
   const numeric = NUMERIC.exec(body);
   if (numeric) {
-    const from = Number(numeric[1]);
-    const to = Number(numeric[2]);
-    const step = Math.abs(Number(numeric[3] ?? 1)) || 1;
+    const from = boundedInteger(numeric[1], 0);
+    const to = boundedInteger(numeric[2], 0);
+    const rawStep = boundedInteger(numeric[3], 1);
+    if (from === null || to === null || rawStep === null) return null;
+    const step = Math.abs(rawStep) || 1;
     if (Math.abs(to - from) / step + 1 > MAX_EXPANSIONS) return null;
     const out: string[] = [];
-    for (let n = from; from <= to ? n <= to : n >= to; n += from <= to ? step : -step) out.push(String(n));
+    for (let n = from; from <= to ? n <= to : n >= to; n += from <= to ? step : -step) {
+      out.push(String(n));
+    }
     return out;
   }
   const alpha = ALPHA.exec(body);
@@ -53,7 +66,7 @@ function sequence(body: string): string[] | null | undefined {
   return undefined;
 }
 
-export function expandBraces(word: string): string[] | null {
+function expand(word: string): string[] | null {
   for (let open = word.indexOf('{'); open !== -1; open = word.indexOf('{', open + 1)) {
     if (word[open - 1] === '$') continue;
     const close = matchingClose(word, open);
@@ -67,7 +80,7 @@ export function expandBraces(word: string): string[] | null {
     const suffix = word.slice(close + 1);
     const results: string[] = [];
     for (const alternative of alternatives) {
-      const inner = expandBraces(prefix + alternative + suffix);
+      const inner = expand(prefix + alternative + suffix);
       if (inner === null) return null;
       results.push(...inner);
       if (results.length > MAX_EXPANSIONS) return null;
@@ -75,4 +88,10 @@ export function expandBraces(word: string): string[] | null {
     return results;
   }
   return [word];
+}
+
+export function expandBraces(word: string): string[] | null {
+  if (!word.includes('{')) return [word];
+  if (word.length > MAX_WORD_LENGTH || word.split('{').length - 1 > MAX_GROUPS) return null;
+  return expand(word);
 }
