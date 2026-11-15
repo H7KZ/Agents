@@ -129,11 +129,11 @@ describe('guard.ts as a hook subprocess', () => {
     assert.equal(logLines(home)[0]?.decision, 'disabled');
   });
 
-  it('fails open on garbage input with a stderr note and an error log line', () => {
+  it('asks on garbage input and writes an error log line', () => {
     const home = tmpDir('h7-home-');
     const result = runNode(script, [], { input: 'garbage', env: { H7_HOME: home } });
     assert.equal(result.status, 0);
-    assert.match(result.stderr, /fail open/);
+    assert.match(result.stdout, /internal error/);
     assert.equal(logLines(home)[0]?.decision, 'error');
   });
 

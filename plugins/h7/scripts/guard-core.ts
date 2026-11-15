@@ -29,19 +29,20 @@ interface HookInput {
   cwd?: unknown;
 }
 
+function askResult(reason: string, note: string): GuardResult {
+  const output = { hookSpecificOutput: { hookEventName: 'PreToolUse', permissionDecision: 'ask', permissionDecisionReason: reason } };
+  return { code: 0, stdout: `${JSON.stringify(output)}
+`, stderr: note === '' ? '' : `${note.trim()}
+` };
+}
+
 function respond(decision: Decision, logError: string | null): GuardResult {
   const note = logError === null ? '' : ` (could not write guard log: ${logError})`;
   if (decision.decision === 'block') {
-    return { code: 2, stdout: '', stderr: `h7 guard blocked [${decision.rule}]: ${decision.reason}${note}\n` };
+    return { code: 2, stdout: '', stderr: `h7 guard blocked [${decision.rule}]: ${decision.reason}${note}
+` };
   }
-  const output = {
-    hookSpecificOutput: {
-      hookEventName: 'PreToolUse',
-      permissionDecision: 'ask',
-      permissionDecisionReason: `h7 guard [${decision.rule}]: ${decision.reason}`,
-    },
-  };
-  return { code: 0, stdout: `${JSON.stringify(output)}\n`, stderr: note === '' ? '' : `${note.trim()}\n` };
+  return askResult(`h7 guard [${decision.rule}]: ${decision.reason}`, note);
 }
 
 export function runGuard(io: GuardIo): GuardResult {
@@ -74,7 +75,6 @@ export function runGuard(io: GuardIo): GuardResult {
   } catch (error) {
     const message = (error as Error).message;
     const logError = appendLog(home, { ...entry('error', 'internal-error', command, cwd), error: message });
-    const note = logError === null ? '' : `; could not write guard log: ${logError}`;
-    return { ...ALLOW, stderr: `h7 guard internal error, allowing the command (fail open): ${message}${note}\n` };
+    return askResult(`h7 guard internal error: ${message}`, logError === null ? '' : `h7 guard: could not write guard log: ${logError}`);
   }
 }

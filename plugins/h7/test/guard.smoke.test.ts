@@ -33,14 +33,14 @@ describe('guard.ts entry point', () => {
     assert.equal(result.stderr, '');
   });
 
-  it('allows silently, honours the kill switch, and fails open on garbage', () => {
+  it('allows silently, honours the kill switch, and asks on garbage', () => {
     const allowed = run('echo hello');
     assert.deepEqual([allowed.status, allowed.stdout, allowed.stderr], [0, '', '']);
     assert.equal(run('git push -f origin main', { H7_GUARD: 'off' }).status, 0);
     const home = tmpDir('h7-home-');
     const garbage = runNode(script, [], { input: '{', env: { H7_HOME: home } });
     assert.equal(garbage.status, 0);
-    assert.match(garbage.stderr, /fail open/);
+    assert.equal(JSON.parse(garbage.stdout).hookSpecificOutput.permissionDecision, 'ask');
   });
 
   it('uses the platform to pick path semantics and reads the real platform', () => {

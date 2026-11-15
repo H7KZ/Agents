@@ -144,19 +144,21 @@ describe('runGuard kill switch and failure handling', () => {
     assert.match(result.stderr, /could not write guard log/);
   });
 
-  it('fails open on malformed input, naming the error on stderr and in the log', () => {
+  it('fails to ASK on malformed input, naming the error in the reason and the log', () => {
     const setup = io({ stdin: '{not json' });
     const result = runGuard(setup);
     assert.equal(result.code, 0);
-    assert.equal(result.stdout, '');
-    assert.match(result.stderr, /^h7 guard internal error, allowing the command \(fail open\): .+\n$/);
+    assert.equal(result.stderr, '');
+    const out = JSON.parse(result.stdout).hookSpecificOutput;
+    assert.equal(out.permissionDecision, 'ask');
+    assert.match(out.permissionDecisionReason, /^h7 guard internal error: .*JSON/);
     const entry = log(setup.home)[0] as Record<string, unknown>;
     assert.equal(entry.decision, 'error');
     assert.equal(entry.rule, 'internal-error');
     assert.match(entry.error as string, /JSON/);
   });
 
-  it('fails open on internal errors after parsing and records the command', () => {
+  it('fails to ASK on internal errors after parsing and records the command', () => {
     const setup = io({ command: 'git reset --hard' });
     const result = runGuard({
       ...setup,
@@ -165,25 +167,27 @@ describe('runGuard kill switch and failure handling', () => {
       },
     });
     assert.equal(result.code, 0);
-    assert.match(result.stderr, /runner exploded/);
+    assert.equal(JSON.parse(result.stdout).hookSpecificOutput.permissionDecision, 'ask');
+    assert.match(result.stdout, /runner exploded/);
     const entry = log(setup.home)[0] as Record<string, unknown>;
     assert.equal(entry.command, 'git reset --hard');
     assert.equal(entry.cwd, '/repo');
     assert.equal(entry.error, 'runner exploded');
   });
 
-  it('fails open and still reports when the log cannot be written', () => {
+  it('still asks and reports when the log cannot be written', () => {
     const home = tmpDir();
     writeTree(home, { '.h7': 'a file' });
     const result = runGuard(io({ home, stdin: 'nope' }));
     assert.equal(result.code, 0);
-    assert.match(result.stderr, /internal error.*could not write guard log/);
+    assert.match(result.stdout, /internal error/);
+    assert.match(result.stderr, /could not write guard log/);
   });
 
   it('accepts a JSON null payload as an internal error, not a crash', () => {
     const result = runGuard(io({ stdin: 'null' }));
     assert.equal(result.code, 0);
-    assert.match(result.stderr, /fail open/);
+    assert.equal(JSON.parse(result.stdout).hookSpecificOutput.permissionDecision, 'ask');
   });
 });
 
