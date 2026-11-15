@@ -59,3 +59,11 @@ export function initRepo(dir: string): string {
   git(dir, 'commit', '-q', '-m', 'init');
   return dir;
 }
+
+export const MUTATION = process.env.H7_MUTATION === '1';
+
+export const SLOW = MUTATION ? { skip: 'skipped in mutation runs (spawns processes)' } : {};
+
+export function runs(full: number): number {
+  return MUTATION ? 20 : full;
+}

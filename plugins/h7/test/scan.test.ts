@@ -1,3 +1,4 @@
+import { runs } from '../../../scripts/test/helpers.ts';
 import assert from 'node:assert/strict';
 import { describe, it } from 'node:test';
 import fc from 'fast-check';
@@ -61,7 +62,7 @@ describe('scan', () => {
         const ctx = makeCtx();
         scan(text, dialect, ctx, { cwd: ctx.cwd, env: {} });
       }),
-      { numRuns: 800 },
+      { numRuns: runs(800) },
     );
   });
 

@@ -3,7 +3,7 @@ import { join } from 'node:path';
 import { describe, it } from 'node:test';
 import { parseFrontmatter } from '../frontmatter.ts';
 import { formatProblem, lintAgent, lintPlugin, lintSkill, main } from '../lint-skills.ts';
-import { cleanupTmp, runNode, tmpDir, writeTree } from './helpers.ts';
+import { SLOW, cleanupTmp, runNode, tmpDir, writeTree } from './helpers.ts';
 
 cleanupTmp();
 
@@ -152,7 +152,7 @@ describe('main and CLI', () => {
     assert.equal(main([], () => {}), 0);
   });
 
-  it('works as a subprocess', () => {
+  it('works as a subprocess', SLOW, () => {
     const script = join(import.meta.dirname, '..', 'lint-skills.ts');
     const dir = plugin({ 'skills/alpha/SKILL.md': '---\nname: alpha\n---\n' });
     const result = runNode(script, [dir]);

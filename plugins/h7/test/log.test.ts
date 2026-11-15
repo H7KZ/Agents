@@ -4,7 +4,7 @@ import fc from 'fast-check';
 import { join } from 'node:path';
 import { describe, it } from 'node:test';
 import { appendDisabledOnce, appendLog, logPath, redact, type LogEntry } from '../scripts/log.ts';
-import { cleanupTmp, tmpDir } from '../../../scripts/test/helpers.ts';
+import { cleanupTmp, tmpDir, runs } from '../../../scripts/test/helpers.ts';
 
 cleanupTmp();
 
@@ -128,7 +128,7 @@ describe('redaction', () => {
         const text = readFileSync(logPath(home), 'utf8');
         assert.ok(!text.includes(value), text);
       }),
-      { numRuns: 150 },
+      { numRuns: runs(150) },
     );
   });
 

@@ -4,7 +4,7 @@ import { join } from 'node:path';
 import { describe, it } from 'node:test';
 import fc from 'fast-check';
 import { main, nodeAtLeast, runChecks, spawnRun, summarize, type Check, type DoctorEnv, type RunResult } from '../scripts/doctor.ts';
-import { cleanupTmp, runNode, tmpDir, writeTree } from '../../../scripts/test/helpers.ts';
+import { SLOW, cleanupTmp, runNode, tmpDir, writeTree } from '../../../scripts/test/helpers.ts';
 
 cleanupTmp();
 
@@ -181,7 +181,7 @@ describe('summarize and main', () => {
   });
 });
 
-describe('spawnRun', () => {
+describe('spawnRun', SLOW, () => {
   it('runs real commands through the shell', () => {
     const ok = spawnRun('node', ['--version']);
     assert.equal(ok.status, 0);
@@ -190,7 +190,7 @@ describe('spawnRun', () => {
   });
 });
 
-describe('doctor.ts as a subprocess', () => {
+describe('doctor.ts as a subprocess', SLOW, () => {
   const script = join(import.meta.dirname, '..', 'scripts', 'doctor.ts');
 
   it('emits JSON for an empty home using H7_HOME', () => {

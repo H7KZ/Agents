@@ -4,7 +4,7 @@ import fc from 'fast-check';
 import { expandBraces, MAX_GROUPS, MAX_WORD_LENGTH } from '../scripts/braces.ts';
 import { runGuard, type GuardIo } from '../scripts/guard-core.ts';
 import { createGit, makeSpawnRunner, type Runner } from '../scripts/git.ts';
-import { cleanupTmp, tmpDir } from '../../../scripts/test/helpers.ts';
+import { cleanupTmp, tmpDir, runs } from '../../../scripts/test/helpers.ts';
 import { ruleOf } from './support.ts';
 
 cleanupTmp();
@@ -117,7 +117,7 @@ describe('brace expansion limits', () => {
         assert.ok(result === null || (result.length >= 1 && result.length <= 256));
         assert.ok(performance.now() - start < 1000);
       }),
-      { numRuns: 400 },
+      { numRuns: runs(400) },
     );
   });
 
@@ -177,7 +177,7 @@ describe('pathological inputs stay fast and never allow destructive commands', (
       fc.property(prefix, fc.constantFrom(...destructive), fc.constantFrom('\n', ' && ', '; ', ' || '), (head, command, sep) => {
         assert.notEqual(verdict(guard(`echo ${head}${sep}${command}`)), 'allow');
       }),
-      { numRuns: 200 },
+      { numRuns: runs(200) },
     );
   });
 });

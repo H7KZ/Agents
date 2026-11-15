@@ -4,7 +4,7 @@ import { delimiter, join } from 'node:path';
 import { describe, it } from 'node:test';
 import { createGit, hardenedEnv, makeSpawnRunner, resolveGitPath, spawnRunner, type RunResult, type Runner } from '../scripts/git.ts';
 import { currentBranchOnDisk, findGitDirs, realDisk, remoteHeadOnDisk, type Disk } from '../scripts/gitfiles.ts';
-import { cleanupTmp, git, initRepo, tmpDir, writeTree } from '../../../scripts/test/helpers.ts';
+import { SLOW, cleanupTmp, git, initRepo, tmpDir, writeTree } from '../../../scripts/test/helpers.ts';
 
 cleanupTmp();
 
@@ -139,7 +139,7 @@ describe('git executable resolution', () => {
     assert.equal(resolveGitPath(join(process.cwd(), 'x'), () => false), null);
   });
 
-  it('does not find a planted git in the working directory', () => {
+  it('does not find a planted git in the working directory', SLOW, () => {
     const planted = tmpDir();
     writeTree(planted, { 'git.exe': 'x', git: 'x' });
     const real = resolveGitPath(process.env.PATH ?? '', (p) => realDisk.kind(p) === 'file');
@@ -150,7 +150,7 @@ describe('git executable resolution', () => {
     assert.deepEqual(makeSpawnRunner(null)(['status'], '/'), { status: null, stdout: '' });
   });
 
-  it('runs git with hardened configuration and environment', () => {
+  it('runs git with hardened configuration and environment', SLOW, () => {
     const dir = initRepo(tmpDir());
     git(dir, 'config', 'core.fsmonitor', 'touch pwned.txt');
     const result = spawnRunner(['status', '--porcelain'], dir);
@@ -167,7 +167,7 @@ describe('git executable resolution', () => {
   });
 });
 
-describe('spawnRunner against real repositories', () => {
+describe('spawnRunner against real repositories', SLOW, () => {
   it('reports status and stdout, and survives a missing directory', () => {
     const dir = initRepo(tmpDir());
     const ok = spawnRunner(['rev-parse', '--show-toplevel'], dir);

@@ -1,3 +1,4 @@
+import { runs } from '../../../scripts/test/helpers.ts';
 import assert from 'node:assert/strict';
 import { describe, it } from 'node:test';
 import fc from 'fast-check';
@@ -202,7 +203,7 @@ describe('tokenize: properties', () => {
         assert.ok(t.segments.every((s) => s.length > 0 && s.every((w) => typeof w === 'string')));
         assert.ok(t.nested.every((n) => typeof n === 'string'));
       }),
-      { numRuns: 400 },
+      { numRuns: runs(400) },
     );
   });
 
@@ -212,7 +213,7 @@ describe('tokenize: properties', () => {
       fc.property(soup, fc.constantFrom<Dialect>('sh', 'ps'), (input, dialect) => {
         tokenize(input, dialect);
       }),
-      { numRuns: 600 },
+      { numRuns: runs(600) },
     );
   });
 

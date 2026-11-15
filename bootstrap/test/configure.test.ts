@@ -6,7 +6,7 @@ import { PassThrough } from 'node:stream';
 import { describe, it } from 'node:test';
 import fc from 'fast-check';
 import { askYesNo, configure, main, marketplaceEntry, mergeSettings, parseOptions, shellRun, type CommandResult, type Deps, type Options } from '../configure.ts';
-import { cleanupTmp, runNode, tmpDir, writeTree } from '../../scripts/test/helpers.ts';
+import { SLOW, cleanupTmp, runNode, tmpDir, writeTree } from '../../scripts/test/helpers.ts';
 
 cleanupTmp();
 
@@ -125,7 +125,7 @@ describe('marketplaceEntry and shellRun', () => {
     assert.deepEqual(marketplaceEntry('/x/y'), { source: { source: 'directory', path: '/x/y' }, autoUpdate: true });
   });
 
-  it('runs commands, quotes awkward arguments and refuses shell metacharacters', () => {
+  it('runs commands, quotes awkward arguments and refuses shell metacharacters', SLOW, () => {
     const ok = shellRun('node', ['--version']);
     assert.equal(ok.status, 0);
     assert.match(ok.stdout, /^v\d/);
@@ -359,13 +359,13 @@ describe('main and CLI', () => {
     assert.equal(await main(['--help'], h.deps), 0);
   });
 
-  it('configure.ts --help works as a subprocess', () => {
+  it('configure.ts --help works as a subprocess', SLOW, () => {
     const result = runNode(join(import.meta.dirname, '..', 'configure.ts'), ['--help'], { env: { H7_HOME: tmpDir() } });
     assert.equal(result.status, 0);
     assert.match(result.stdout, /Usage:/);
   });
 
-  it('configure.ts exits 2 on bad arguments as a subprocess and uses the real home when H7_HOME is unset', () => {
+  it('configure.ts exits 2 on bad arguments as a subprocess and uses the real home when H7_HOME is unset', SLOW, () => {
     const script = join(import.meta.dirname, '..', 'configure.ts');
     assert.equal(runNode(script, ['--bogus'], { env: { H7_HOME: tmpDir() } }).status, 2);
     const home = tmpDir();
@@ -375,7 +375,7 @@ describe('main and CLI', () => {
     assert.equal(readdirSync(home).length, 0);
   });
 
-  it('the installer wrappers forward arguments to configure.ts', () => {
+  it('the installer wrappers forward arguments to configure.ts', SLOW, () => {
     const dir = join(import.meta.dirname, '..');
     const bash = process.platform === 'win32' ? 'bash' : 'sh';
     const viaSh = spawnWrapper(bash, [join(dir, 'install.sh'), '--help']);

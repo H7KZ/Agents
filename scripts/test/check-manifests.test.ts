@@ -2,7 +2,7 @@ import assert from 'node:assert/strict';
 import { join } from 'node:path';
 import { describe, it } from 'node:test';
 import { checkManifests, main } from '../check-manifests.ts';
-import { cleanupTmp, runNode, tmpDir, writeTree } from './helpers.ts';
+import { SLOW, cleanupTmp, runNode, tmpDir, writeTree } from './helpers.ts';
 
 cleanupTmp();
 
@@ -91,7 +91,7 @@ describe('main and CLI', () => {
     assert.equal(main([], () => {}), 0);
   });
 
-  it('works as a subprocess', () => {
+  it('works as a subprocess', SLOW, () => {
     const script = join(import.meta.dirname, '..', 'check-manifests.ts');
     assert.equal(runNode(script, []).status, 0);
     assert.equal(runNode(script, [tmpDir()]).status, 1);

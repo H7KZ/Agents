@@ -1,3 +1,4 @@
+import { runs } from '../../../scripts/test/helpers.ts';
 import assert from 'node:assert/strict';
 import { describe, it } from 'node:test';
 import fc from 'fast-check';
@@ -59,7 +60,7 @@ describe('expandBraces', () => {
         const result = expandBraces(word);
         assert.ok(result === null || (result.length >= 1 && result.length <= 256));
       }),
-      { numRuns: 500 },
+      { numRuns: runs(500) },
     );
   });
 });

@@ -2,7 +2,7 @@ import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { describe, it } from 'node:test';
-import { cleanupTmp, runNode, tmpDir } from '../../../scripts/test/helpers.ts';
+import { SLOW, cleanupTmp, runNode, tmpDir } from '../../../scripts/test/helpers.ts';
 
 cleanupTmp();
 
@@ -15,7 +15,7 @@ function run(command: string, extra: Record<string, string> = {}, tool = 'Bash')
   return { home, ...runNode(script, [], { input, env: { H7_HOME: home, ...extra } }) };
 }
 
-describe('guard.ts entry point', () => {
+describe('guard.ts entry point', SLOW, () => {
   it('exits 2 with a reason on stderr and logs when blocking', () => {
     const result = run('git push --force origin main');
     assert.equal(result.status, 2);
