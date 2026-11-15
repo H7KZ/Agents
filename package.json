@@ -9,8 +9,8 @@
     "typecheck": "tsc --noEmit",
     "lint:skills": "node scripts/lint-skills.ts",
     "lint:manifests": "node scripts/check-manifests.ts",
-    "test": "node --test \"plugins/h7/test/**/*.test.ts\" \"scripts/test/**/*.test.ts\" \"bootstrap/test/**/*.test.ts\"",
-    "test:coverage": "node --test --experimental-test-coverage --test-coverage-lines=100 --test-coverage-branches=100 --test-coverage-functions=100 --test-coverage-include=\"plugins/h7/scripts/**/*.ts\" --test-coverage-include=\"scripts/**/*.ts\" --test-coverage-include=\"bootstrap/**/*.ts\" --test-coverage-exclude=\"**/test/**\" --test-coverage-exclude=\"**/*.test.ts\" \"plugins/h7/test/**/*.test.ts\" \"scripts/test/**/*.test.ts\" \"bootstrap/test/**/*.test.ts\"",
+    "test": "node --test \"plugins/h7/test/**/*.test.ts\" \"scripts/test/**/*.test.ts\" \"bootstrap/test/**/*.test.ts\" \"plugins/h7/test/**/*.e2e.ts\"",
+    "test:coverage": "node --test --experimental-test-coverage --test-coverage-lines=100 --test-coverage-branches=100 --test-coverage-functions=100 --test-coverage-include=\"plugins/h7/scripts/**/*.ts\" --test-coverage-include=\"scripts/**/*.ts\" --test-coverage-include=\"bootstrap/**/*.ts\" --test-coverage-exclude=\"**/test/**\" --test-coverage-exclude=\"**/*.test.ts\" \"plugins/h7/test/**/*.test.ts\" \"scripts/test/**/*.test.ts\" \"bootstrap/test/**/*.test.ts\" \"plugins/h7/test/**/*.e2e.ts\"",
     "mutation": "stryker run",
     "check": "npm run typecheck && npm run lint:skills && npm run lint:manifests && npm run test"
   },
@@ -18,6 +18,6 @@
     "@stryker-mutator/core": "^10.1.1",
     "@types/node": "^22.20.5",
     "fast-check": "^4.10.2",
-    "typescript": "^7.0.2"
+    "typescript": "5.9"
   }
 }
