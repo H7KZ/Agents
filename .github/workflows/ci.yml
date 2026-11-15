@@ -1,0 +1,62 @@
+name: ci
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  check:
+    name: check (${{ matrix.os }}, node ${{ matrix.node }})
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, windows-latest, macos-latest]
+        node: [22.18.0, 24.x]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: ${{ matrix.node }}
+          cache: npm
+      - run: npm ci
+      - name: Typecheck
+        run: npm run typecheck
+      - name: Lint skills and agents
+        run: npm run lint:skills
+      - name: Validate manifests
+        run: npm run lint:manifests
+      - name: Tests with 100% coverage gate
+        run: npm run test:coverage
+      - name: Validate plugin and marketplace with Claude Code
+        if: matrix.os == 'ubuntu-latest' && matrix.node == '24.x'
+        run: |
+          npx -y @anthropic-ai/claude-code plugin validate ./plugins/h7
+          npx -y @anthropic-ai/claude-code plugin validate .
+
+  mutation:
+    name: mutation (ubuntu, node 24.x)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24.x
+          cache: npm
+      - run: npm ci
+      - name: Stryker (break threshold 80)
+        run: npm run mutation
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: mutation-report
+          path: reports/mutation
+          if-no-files-found: ignore
