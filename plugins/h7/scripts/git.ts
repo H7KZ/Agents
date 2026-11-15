@@ -46,16 +46,17 @@ export function hardenedEnv(base: NodeJS.ProcessEnv): NodeJS.ProcessEnv {
   return { ...base, GIT_CONFIG_NOSYSTEM: '1', GIT_OPTIONAL_LOCKS: '0', GIT_TERMINAL_PROMPT: '0' };
 }
 
-export function makeSpawnRunner(executable: string | null, baseEnv: NodeJS.ProcessEnv = process.env): Runner {
+export function makeSpawnRunner(executable: string | null, baseEnv: NodeJS.ProcessEnv = process.env, spawn: typeof spawnSync = spawnSync): Runner {
   return (args, cwd) => {
     if (executable === null) return { status: null, stdout: '' };
-    const result = spawnSync(executable, [...SAFE_ARGS, ...args], {
+    const result = spawn(executable, [...SAFE_ARGS, ...args], {
       cwd,
       encoding: 'utf8',
       timeout: 5000,
       windowsHide: true,
       env: hardenedEnv(baseEnv),
     });
+    if ((result.error as NodeJS.ErrnoException | undefined)?.code === 'ETIMEDOUT') throw new Error(`git ${args[0]} timed out`);
     return { status: result.status, stdout: result.stdout ?? '' };
   };
 }
@@ -68,7 +69,8 @@ function nulList(stdout: string): string[] {
 
 export function createGit(run: Runner, disk: Disk = realDisk): Git {
   const cache = new Map<string, unknown>();
-  const memo = <T>(key: string, compute: () => T): T => {
+  const memo = <T>(parts: string[], compute: () => T): T => {
+    const key = JSON.stringify(parts);
     if (!cache.has(key)) cache.set(key, compute());
     return cache.get(key) as T;
   };
@@ -83,12 +85,12 @@ export function createGit(run: Runner, disk: Disk = realDisk): Git {
   };
 
   return {
-    repoRoot: (cwd) => memo(`root\0${cwd}`, () => text(['rev-parse', '--show-toplevel'], cwd)),
-    currentBranch: (cwd) => memo(`branch|${cwd}`, () => currentBranchOnDisk(cwd, disk)),
-    defaultBranch: (cwd, remote) => memo(`default|${cwd}|${remote}`, () => remoteHeadOnDisk(cwd, remote, disk)),
-    isDirty: (cwd) => memo(`dirty\0${cwd}`, () => text(['status', '--porcelain'], cwd) !== null),
-    stagedFiles: (cwd) => memo(`staged\0${cwd}`, () => list(['diff', '--cached', '--name-only', '--diff-filter=d', '-z'], cwd)),
-    modifiedFiles: (cwd) => memo(`modified\0${cwd}`, () => list(['diff', '--name-only', '--relative', '--diff-filter=d', '-z'], cwd)),
-    untrackedFiles: (cwd) => memo(`untracked\0${cwd}`, () => list(['ls-files', '--others', '--exclude-standard', '-z'], cwd)),
+    repoRoot: (cwd) => memo(['root', cwd], () => text(['rev-parse', '--show-toplevel'], cwd)),
+    currentBranch: (cwd) => memo(['branch', cwd], () => currentBranchOnDisk(cwd, disk)),
+    defaultBranch: (cwd, remote) => memo(['default', cwd, remote], () => remoteHeadOnDisk(cwd, remote, disk)),
+    isDirty: (cwd) => memo(['dirty', cwd], () => text(['status', '--porcelain'], cwd) !== null),
+    stagedFiles: (cwd) => memo(['staged', cwd], () => list(['diff', '--cached', '--name-only', '--diff-filter=d', '-z'], cwd)),
+    modifiedFiles: (cwd) => memo(['modified', cwd], () => list(['diff', '--name-only', '--relative', '--diff-filter=d', '-z'], cwd)),
+    untrackedFiles: (cwd) => memo(['untracked', cwd], () => list(['ls-files', '--others', '--exclude-standard', '-z'], cwd)),
   };
 }
