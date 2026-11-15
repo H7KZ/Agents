@@ -1,0 +1,80 @@
+import { createGit, type Runner } from './git.ts';
+import { appendDisabledOnce, appendLog, type LogEntry } from './log.ts';
+import { makePaths, type Realpath } from './paths.ts';
+import { pickDecision, scan } from './scan.ts';
+import type { Ctx, Decision } from './types.ts';
+
+export interface GuardIo {
+  stdin: string;
+  env: Record<string, string | undefined>;
+  platform: string;
+  runner: Runner;
+  realpath: Realpath;
+  homedir: string;
+  fallbackCwd: string;
+  now: () => Date;
+}
+
+export interface GuardResult {
+  code: 0 | 2;
+  stdout: string;
+  stderr: string;
+}
+
+const ALLOW: GuardResult = { code: 0, stdout: '', stderr: '' };
+
+interface HookInput {
+  tool_name?: unknown;
+  tool_input?: { command?: unknown };
+  cwd?: unknown;
+}
+
+function respond(decision: Decision, logError: string | null): GuardResult {
+  const note = logError === null ? '' : ` (could not write guard log: ${logError})`;
+  if (decision.decision === 'block') {
+    return { code: 2, stdout: '', stderr: `h7 guard blocked [${decision.rule}]: ${decision.reason}${note}\n` };
+  }
+  const output = {
+    hookSpecificOutput: {
+      hookEventName: 'PreToolUse',
+      permissionDecision: 'ask',
+      permissionDecisionReason: `h7 guard [${decision.rule}]: ${decision.reason}`,
+    },
+  };
+  return { code: 0, stdout: `${JSON.stringify(output)}\n`, stderr: note === '' ? '' : `${note.trim()}\n` };
+}
+
+export function runGuard(io: GuardIo): GuardResult {
+  const home = io.env.H7_HOME ?? io.homedir;
+  const entry = (decision: LogEntry['decision'], rule: string, command: string, cwd: string): LogEntry => ({
+    ts: io.now().toISOString(),
+    decision,
+    rule,
+    command,
+    cwd,
+  });
+  let cwd = io.fallbackCwd;
+  let command = '';
+  try {
+    if (io.env.H7_GUARD === 'off') {
+      const logError = appendDisabledOnce(home, entry('disabled', 'h7-guard-off', '', cwd));
+      return { ...ALLOW, stderr: logError === null ? '' : `h7 guard: could not write guard log: ${logError}\n` };
+    }
+    const input = JSON.parse(io.stdin) as HookInput;
+    const text = input.tool_input?.command;
+    if ((input.tool_name !== 'Bash' && input.tool_name !== 'PowerShell') || typeof text !== 'string' || text.trim() === '') {
+      return ALLOW;
+    }
+    command = text;
+    cwd = typeof input.cwd === 'string' && input.cwd !== '' ? input.cwd : io.fallbackCwd;
+    const ctx: Ctx = { cwd, home, paths: makePaths(io.platform === 'win32' ? 'win32' : 'posix', io.realpath), git: createGit(io.runner) };
+    const decision = pickDecision(scan(command, input.tool_name === 'PowerShell' ? 'ps' : 'sh', ctx, { cwd, env: {} }));
+    if (decision === null) return ALLOW;
+    return respond(decision, appendLog(home, entry(decision.decision, decision.rule, command, cwd)));
+  } catch (error) {
+    const message = (error as Error).message;
+    const logError = appendLog(home, { ...entry('error', 'internal-error', command, cwd), error: message });
+    const note = logError === null ? '' : `; could not write guard log: ${logError}`;
+    return { ...ALLOW, stderr: `h7 guard internal error, allowing the command (fail open): ${message}${note}\n` };
+  }
+}
