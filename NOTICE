@@ -1,0 +1,9 @@
+h7 (H7KZ/Agents)
+Copyright (c) 2026 H7KZ, MIT License (see LICENSE).
+
+Third-party attribution
+
+This project borrows patterns from, and will port code from, "pstack" in
+cursor/plugins (https://github.com/cursor/plugins), MIT License,
+Copyright (c) Lauren Tan. Ported files carry this attribution and the
+upstream license text.

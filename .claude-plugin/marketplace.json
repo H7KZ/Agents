@@ -1,0 +1,16 @@
+{
+  "name": "h7kz",
+  "owner": {
+    "name": "H7KZ"
+  },
+  "plugins": [
+    {
+      "name": "h7",
+      "source": "./plugins/h7",
+      "description": "Universal agent workflow: safety guard, verification, review, ship."
+    }
+  ],
+  "metadata": {
+    "description": "H7KZ agent workflow plugins for Claude Code."
+  }
+}

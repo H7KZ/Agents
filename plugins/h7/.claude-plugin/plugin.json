@@ -1,0 +1,9 @@
+{
+  "name": "h7",
+  "description": "Universal agent workflow for Claude Code: safety guard, verification, review, ship.",
+  "author": {
+    "name": "H7KZ"
+  },
+  "repository": "https://github.com/H7KZ/Agents",
+  "license": "MIT"
+}
