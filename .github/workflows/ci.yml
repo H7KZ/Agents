@@ -52,7 +52,14 @@ jobs:
           node-version: 24.x
           cache: npm
       - run: npm ci
-      - name: Stryker (break threshold 80)
+      - uses: actions/cache@v4
+        with:
+          path: reports/stryker-incremental.json
+          key: stryker-${{ github.ref }}-${{ github.sha }}
+          restore-keys: |
+            stryker-${{ github.ref }}-
+            stryker-refs/heads/main-
+      - name: Stryker (break threshold 80, incremental)
         run: npm run mutation
       - uses: actions/upload-artifact@v4
         if: always()
