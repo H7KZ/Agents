@@ -288,9 +288,16 @@ describe('classifyCommand', () => {
       fc.string().map((x) => '~' + x),
       fc.string().map((x) => '../' + x),
       fc.string().map((x) => 'a/../' + x),
-      fc.string().map((x) => '-' + x).filter((x) => !/^-[nps]*$/.test(x) && !/^-(?:U|n)d+$/.test(x)),
+      fc.string().map((x) => '-O' + x),
+      fc.string().map((x) => '--' + x + '=/etc'),
     );
     fc.assert(fc.property(fc.constantFrom('git diff', 'git log', 'git show', 'git grep -e a', 'grep -r a', 'rg a'), hostile, (base, arg) => assert.equal(classifyCommand(base + ' ' + arg).status, 'needs-approval')));
+  });
+
+  it('regression: the property generator produced options that really are allowlisted', () => {
+    // Found by fast-check on a rare run: a dash-led string can be a legitimate option (-w, --, --no-color), so it is not hostile.
+    for (const command of ['grep -r a -w', 'git grep -e a -i', 'git diff --', 'git diff --no-color', 'rg a -n']) assert.equal(classifyCommand(command).status, 'auto', command);
+    for (const command of ['git diff -O', 'git diff --x=/etc', 'rg a -O ', 'grep -r a --=/etc']) assert.equal(classifyCommand(command).status, 'needs-approval', command);
   });
 
   it('auto-runs the exact recorded test command, whatever its shape, and nothing similar', () => {
