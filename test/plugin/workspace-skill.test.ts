@@ -24,7 +24,7 @@ describe('workspace mode in the skills', () => {
 
   it('ship reads settings from the workspace and follows the PR template headings', () => {
     const text = read('ship');
-    for (const phrase of ['prTemplate', 'not from `origin/<default>`', 'its headings in ITS order', 'trusted']) assert.ok(text.includes(phrase), phrase);
+    for (const phrase of ['prTemplate', 'not from `origin/<default>`', 'ITS headings in ITS order', 'trusted']) assert.ok(text.includes(phrase), phrase);
   });
 
   it('retro targets the workspace AGENTS.md, doctor explains the trust check', () => {
