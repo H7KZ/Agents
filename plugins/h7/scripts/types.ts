@@ -39,8 +39,9 @@ export interface ScanState {
   /** Set once an earlier command in the chain stashed, reset or committed tracked changes away. */
   trackedClean?: boolean;
   untrackedClean?: boolean;
-  /** The repository root the two flags above were learned in; another repository in the same chain is asked about again. */
-  cleanRoot?: string | null;
+  /** The repository root each flag above was learned in; a flag only counts for exactly that root, any other repository is asked about again. */
+  trackedRoot?: string | null;
+  untrackedRoot?: string | null;
   /** Paths added to the index earlier in the chain. */
   staged: string[];
   /** Git aliases defined earlier in the chain. */

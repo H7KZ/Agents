@@ -5,6 +5,7 @@ import { ask, block, expandIn, IGNORED_LOSS, type Ctx, type Decision, type ScanS
 const PROTECTED = new Set(['main', 'master', 'production', 'prod']);
 const FORCE_FLAGS = ['--force', '-f', '--force-with-lease', '--force-if-includes', '--mirror'];
 const HOOK_SUBS = new Set(['commit', 'push', 'merge', 'rebase', 'am', 'cherry-pick', 'revert', 'pull', 'checkout', 'switch']);
+const REDIRECTORS = new Set(['-c', '--config-env', '--git-dir', '--work-tree', '--namespace', '--super-prefix', '--exec-path', '--attr-source']);
 const VALUE_GLOBALS = new Set(['--namespace', '--super-prefix', '--attr-source']);
 const NO_VERIFY = { vocab: ['--no-verify'] };
 const COMMIT_SPEC: ParseSpec = {
@@ -67,6 +68,8 @@ export interface GitCall {
   state: ScanState;
   /** True when -C, --git-dir or --work-tree could not be resolved statically. */
   unresolvedRepo: boolean;
+  /** True when a global option may redirect the repository, config or worktree (see REDIRECTORS). */
+  redirected: boolean;
   /** Body of a shell alias (`!...`) that the call runs, if any. */
   shell: string | null;
 }
@@ -76,11 +79,13 @@ interface Globals {
   configs: string[];
   envConfigs: string[];
   unresolved: boolean;
+  /** Any option that can point git somewhere the cwd does not say (-c, --config-env, --git-dir, --work-tree, --namespace, --super-prefix, --exec-path, --attr-source). */
+  redirected: boolean;
   next: number;
 }
 
 function parseGlobals(argv: string[], cwd: string, ctx: Ctx): Globals {
-  const out: Globals = { at: cwd, configs: [], envConfigs: [], unresolved: false, next: 0 };
+  const out: Globals = { at: cwd, configs: [], envConfigs: [], unresolved: false, redirected: false, next: 0 };
   let gitDir: string | undefined;
   let workTree: string | undefined;
   const dirArg = (value: string): string | null => {
@@ -96,6 +101,7 @@ function parseGlobals(argv: string[], cwd: string, ctx: Ctx): Globals {
     const attached = arg.startsWith('--') && eq !== -1;
     const value = attached ? arg.slice(eq + 1) : (argv[i + 1] ?? '');
     const width = attached ? 1 : 2;
+    if (REDIRECTORS.has(name)) out.redirected = true;
     if (arg === '-C') {
       const dir = dirArg(value);
       if (dir !== null && dir !== '') out.at = ctx.paths.resolve(out.at, dir);
@@ -155,7 +161,7 @@ export function parseGitCall(argv: string[], cwd: string, env: Record<string, st
     sub = words[0] ?? '';
     args = [...words.slice(1), ...args];
   }
-  return { sub, args, cwd: globals.at, configs: globals.configs, envConfigs: globals.envConfigs, env, state, unresolvedRepo: globals.unresolved, shell };
+  return { sub, args, cwd: globals.at, configs: globals.configs, envConfigs: globals.envConfigs, env, state, unresolvedRepo: globals.unresolved, redirected: globals.redirected, shell };
 }
 
 const CONFIG_SPEC: ParseSpec = { valueShort: 'f', valueLong: ['--file', '--type', '--blob', '--default', '--comment', '--value'] };
@@ -322,16 +328,16 @@ function lostWork(call: GitCall, parsed: ParsedArgs, ctx: Ctx): Loss | null {
 }
 
 /** Earlier commands in the chain only vouch for the repository they ran in. */
-function knownHere(call: GitCall, ctx: Ctx): boolean {
-  return call.state.cleanRoot === ctx.git.repoRoot(call.cwd);
+function knownHere(call: GitCall, ctx: Ctx, root: string | null | undefined): boolean {
+  return root === ctx.git.repoRoot(call.cwd);
 }
 
 function hasTrackedChanges(call: GitCall, ctx: Ctx): boolean {
-  return call.state.trackedClean === undefined || !knownHere(call, ctx) ? ctx.git.trackedDirty(call.cwd) : !call.state.trackedClean;
+  return call.state.trackedClean === undefined || !knownHere(call, ctx, call.state.trackedRoot) ? ctx.git.trackedDirty(call.cwd) : !call.state.trackedClean;
 }
 
 function hasUntracked(call: GitCall, ctx: Ctx, ignored: boolean): boolean {
-  if (call.state.untrackedClean !== undefined && knownHere(call, ctx)) return !call.state.untrackedClean;
+  if (call.state.untrackedClean !== undefined && knownHere(call, ctx, call.state.untrackedRoot)) return !call.state.untrackedClean;
   return ctx.git.untrackedFiles(call.cwd).length > 0 || (ignored && ctx.git.ignoredFiles(call.cwd).length > 0);
 }
 
@@ -345,7 +351,8 @@ function destructive(call: GitCall, ctx: Ctx): Decision | null {
   if (!dirty) return null;
   const files = loss.scope === 'tracked' ? 'uncommitted changes' : 'untracked files';
   // A directory the guard could not follow (a cd it failed to resolve, GIT_DIR or GIT_WORK_TREE set in the command) is not a target to snapshot: the block stays.
-  const redirected = 'GIT_DIR' in call.env || 'GIT_WORK_TREE' in call.env;
+  // Fail closed: any GIT_* variable (any case; Windows env names are case-insensitive) or redirecting option means no snapshot target.
+  const redirected = call.redirected || Object.keys(call.env).some((key) => key.toUpperCase().startsWith('GIT_'));
   const dir = call.state.cwdUnknown === true || redirected ? undefined : call.cwd;
   return {
     ...block(
@@ -606,5 +613,6 @@ export function applyGitEffects(call: GitCall, ctx: Ctx): void {
     default:
       break;
   }
-  if (state.trackedClean !== before[0] || state.untrackedClean !== before[1]) state.cleanRoot = ctx.git.repoRoot(call.cwd);
+  if (state.trackedClean !== before[0]) state.trackedRoot = ctx.git.repoRoot(call.cwd);
+  if (state.untrackedClean !== before[1]) state.untrackedRoot = ctx.git.repoRoot(call.cwd);
 }

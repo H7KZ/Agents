@@ -273,9 +273,36 @@ describe('guard: destructive git on a dirty tree', () => {
     assert.equal(callIn('GIT_DIR=/other/.git git reset --hard', perDir(script)).code, 2);
     assert.equal(callIn('GIT_WORK_TREE=/other git reset --hard', perDir(script)).code, 2);
     assert.ok(!script.calls.some((c) => c.args[0] === 'update-ref'));
-    const viaGitDir: Script = { calls: [] };
-    assert.equal(callIn('git --git-dir=/other/.git reset --hard', perDir(viaGitDir)).code, 0);
-    assert.deepEqual(snapshotDirs(viaGitDir), ['/other']);
+    assert.equal(callIn('git --git-dir=/other/.git reset --hard', perDir(script)).code, 2);
+  });
+
+  it('a clean flag learned in one repository never counts for another, per flag', () => {
+    const script: Script = { calls: [] };
+    const runner: Runner = (args, cwd, env) => {
+      if (args[0] === 'status') return ok('');
+      if (args[0] === 'ls-files') return ok('x ');
+      return perDir(script)(args, cwd, env);
+    };
+    const result = callIn('git -C /repo clean -fd && git -C /other commit -a -m x && git -C /other clean -fd', runner);
+    assert.equal(result.code, 0);
+    assert.deepEqual(snapshotDirs(script).sort(), ['/other', '/repo']);
+  });
+
+  it('property: any redirector on a destructive call keeps the block (no snapshot)', () => {
+    const redirectors = ['-c core.worktree=/other', '-c core.hooksPath=/x', '--config-env=core.worktree=V', '--git-dir=/other/.git', '--work-tree=/other', '--namespace=n', '--super-prefix=p/', '--exec-path=/x', '--attr-source=HEAD'];
+    const envs = ['GIT_DIR=/other/.git', 'git_dir=/other/.git', 'Git_Work_Tree=/other', 'GIT_COMMON_DIR=/x', 'GIT_INDEX_FILE=/x', 'GIT_CONFIG_COUNT=1', 'GIT_CONFIG_GLOBAL=/x', 'GIT_SOMETHING_NEW=1'];
+    const subs = ['reset --hard', 'checkout .', 'restore .', 'clean -fd'];
+    fc.assert(
+      fc.property(fc.constantFrom(...subs), fc.option(fc.constantFrom(...redirectors), { nil: undefined }), fc.option(fc.constantFrom(...envs), { nil: undefined }), (sub, option, env) => {
+        fc.pre(option !== undefined || env !== undefined);
+        const script: Script = { calls: [] };
+        const command = `${env === undefined ? '' : `${env} `}git ${option === undefined ? '' : `${option} `}${sub}`;
+        const result = callIn(command, (args, cwd, e) => (args[0] === 'ls-files' ? ok('x ') : perDir(script)(args, cwd, e)));
+        assert.ok(!script.calls.some((c) => c.args[0] === 'update-ref'), command);
+        assert.ok(result.code === 2 || result.stdout.includes('"ask"'), command);
+      }),
+      { numRuns: runs(150) },
+    );
   });
 
   it('keeps every other block: skipping hooks in the same chain is still blocked and nothing is snapshotted', () => {
