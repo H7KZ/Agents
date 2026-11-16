@@ -2,7 +2,7 @@ import { spawnSync } from 'node:child_process';
 import { devNull } from 'node:os';
 import { delimiter, isAbsolute, join } from 'node:path';
 import { statSync } from 'node:fs';
-import { currentBranchOnDisk, realDisk, remoteHeadOnDisk, type Disk } from './gitfiles.ts';
+import { currentBranchOnDisk, findGitDirs, realDisk, remoteHeadOnDisk, type Disk } from './gitfiles.ts';
 
 export interface RunResult {
   status: number | null;
@@ -12,13 +12,17 @@ export interface RunResult {
 export type Runner = (args: string[], cwd: string) => RunResult;
 
 export interface Git {
+  /** Repository top level, or null when cwd is not inside a repository. Throws when git cannot answer. */
   repoRoot(cwd: string): string | null;
   currentBranch(cwd: string): string | null;
   defaultBranch(cwd: string, remote: string): string | null;
-  isDirty(cwd: string): boolean;
+  /** Tracked files with staged or unstaged changes (untracked files do not count). */
+  trackedDirty(cwd: string): boolean;
+  /** The lists below are relative to the repository root and are empty outside a repository. */
   stagedFiles(cwd: string): string[];
   modifiedFiles(cwd: string): string[];
   untrackedFiles(cwd: string): string[];
+  ignoredFiles(cwd: string): string[];
 }
 
 const SAFE_ARGS = ['-c', 'core.fsmonitor=false', '-c', 'core.untrackedCache=false', '-c', `core.hooksPath=${devNull}`, '-c', 'protocol.ext.allow=never'];
@@ -67,6 +71,7 @@ function nulList(stdout: string): string[] {
   return stdout.split('\0').filter((entry) => entry !== '');
 }
 
+/** Any failure to get an answer from git throws, so the guard asks instead of treating the repo as clean. */
 export function createGit(run: Runner, disk: Disk = realDisk): Git {
   const cache = new Map<string, unknown>();
   const memo = <T>(parts: string[], compute: () => T): T => {
@@ -74,23 +79,33 @@ export function createGit(run: Runner, disk: Disk = realDisk): Git {
     if (!cache.has(key)) cache.set(key, compute());
     return cache.get(key) as T;
   };
-  const text = (args: string[], cwd: string): string | null => {
+  const exec = (args: string[], cwd: string): string => {
     const result = run(args, cwd);
-    const out = result.stdout.trim();
-    return result.status === 0 && out !== '' ? out : null;
+    if (result.status !== 0) throw new Error(`git ${args[0]} failed (status ${result.status}); cannot inspect the repository`);
+    return result.stdout;
   };
-  const list = (args: string[], cwd: string): string[] => {
-    const result = run(args, cwd);
-    return result.status === 0 ? nulList(result.stdout) : [];
-  };
+  const repoRoot = (cwd: string): string | null =>
+    memo(['root', cwd], () => {
+      if (findGitDirs(cwd, disk) === null) return null;
+      const root = exec(['rev-parse', '--show-toplevel'], cwd).trim();
+      if (root === '') throw new Error('git rev-parse returned no repository root');
+      return root;
+    });
+  const inRoot = <T>(name: string, cwd: string, empty: T, compute: (root: string) => T): T =>
+    memo([name, cwd], () => {
+      const root = repoRoot(cwd);
+      return root === null ? empty : compute(root);
+    });
+  const list = (args: string[]) => (cwd: string): string[] => inRoot(args.join(' '), cwd, [], (root) => nulList(exec(args, root)));
 
   return {
-    repoRoot: (cwd) => memo(['root', cwd], () => text(['rev-parse', '--show-toplevel'], cwd)),
+    repoRoot,
     currentBranch: (cwd) => memo(['branch', cwd], () => currentBranchOnDisk(cwd, disk)),
     defaultBranch: (cwd, remote) => memo(['default', cwd, remote], () => remoteHeadOnDisk(cwd, remote, disk)),
-    isDirty: (cwd) => memo(['dirty', cwd], () => text(['status', '--porcelain'], cwd) !== null),
-    stagedFiles: (cwd) => memo(['staged', cwd], () => list(['diff', '--cached', '--name-only', '--diff-filter=d', '-z'], cwd)),
-    modifiedFiles: (cwd) => memo(['modified', cwd], () => list(['diff', '--name-only', '--relative', '--diff-filter=d', '-z'], cwd)),
-    untrackedFiles: (cwd) => memo(['untracked', cwd], () => list(['ls-files', '--others', '--exclude-standard', '-z'], cwd)),
+    trackedDirty: (cwd) => inRoot('dirty', cwd, false, (root) => exec(['status', '--porcelain', '--untracked-files=no'], root).trim() !== ''),
+    stagedFiles: list(['diff', '--cached', '--name-only', '--diff-filter=d', '-z']),
+    modifiedFiles: list(['diff', '--name-only', '--diff-filter=d', '-z']),
+    untrackedFiles: list(['ls-files', '--others', '--exclude-standard', '-z']),
+    ignoredFiles: list(['ls-files', '--others', '--ignored', '--exclude-standard', '--directory', '-z']),
   };
 }

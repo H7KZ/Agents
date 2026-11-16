@@ -7,7 +7,7 @@ import { run, type GuardIo } from '../scripts/guard-core.ts';
 const runGuard = (setup: GuardIo) => run(setup.stdin, setup.env, setup);
 import { createGit, makeSpawnRunner, type Runner } from '../scripts/git.ts';
 import { cleanupTmp, tmpDir, runs } from '../../../scripts/test/helpers.ts';
-import { ruleOf } from './support.ts';
+import { repoDisk, ruleOf } from './support.ts';
 
 cleanupTmp();
 
@@ -21,6 +21,7 @@ function guard(command: string, over: Partial<GuardIo> = {}) {
     platform: 'linux',
     runner,
     realpath: (p) => p,
+    disk: repoDisk,
     homedir: home,
     fallbackCwd: '/repo',
     now: () => new Date(0),
@@ -42,6 +43,17 @@ describe('internal failures ask instead of allowing', () => {
       const result = guard(command, { runner: throwing('rule exploded') });
       assert.equal(verdict(result), 'ask', command);
       assert.match(JSON.parse(result.stdout).hookSpecificOutput.permissionDecisionReason, /^h7 guard internal error: rule exploded$/);
+    }
+  });
+
+  it('git missing, failing or corrupt inside a repository asks and never reports clean', () => {
+    const outcomes: Runner[] = [() => ({ status: null, stdout: '' }), () => ({ status: 128, stdout: '' }), (args) => (args[0] === 'rev-parse' ? { status: 0, stdout: '/repo\n' } : { status: 128, stdout: '' })];
+    for (const runner of outcomes) {
+      for (const command of ['git reset --hard', 'git checkout .', 'git commit -m x', 'git add -A', 'git clean -fd', ...(runner === outcomes[2] ? [] : ['rm -rf dist'])]) {
+        const result = guard(command, { runner });
+        assert.equal(verdict(result), 'ask', command);
+        assert.match(result.stdout, /internal error: git /);
+      }
     }
   });
 
@@ -77,10 +89,10 @@ describe('memo keys cannot collide', () => {
     g.defaultBranch('a|b', 'c');
     assert.equal(computations, 2);
     const roots: string[] = [];
-    const g2 = createGit((_args, cwd) => { roots.push(cwd); return { status: 0, stdout: cwd }; });
+    const g2 = createGit((_args, cwd) => { roots.push(cwd); return { status: 0, stdout: cwd }; }, { kind: () => 'dir', read: () => null });
     assert.equal(g2.repoRoot('x\0y'), 'x\0y');
     assert.equal(g2.repoRoot('x'), 'x');
-    assert.equal(g2.isDirty('x'), true);
+    assert.equal(g2.trackedDirty('x'), true);
     assert.deepEqual(roots, ['x\0y', 'x', 'x']);
   });
 });

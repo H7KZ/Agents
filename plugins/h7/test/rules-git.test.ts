@@ -248,7 +248,7 @@ describe('destructive git commands with a dirty worktree', () => {
   it('does not query git status for harmless commands', () => {
     const calls: Calls = { list: [] };
     ruleOf('git status && git log && git reset --soft HEAD', { calls, dirty: true });
-    assert.ok(!calls.list.includes('isDirty'));
+    assert.ok(!calls.list.includes('trackedDirty'));
   });
 
   it('explains how to proceed', () => {
@@ -339,6 +339,6 @@ describe('parseGitCall global options', () => {
     const seen: string[] = [];
     const calls: Calls = { list: seen };
     ruleOf('git -C sub reset --hard', { calls, dirty: true });
-    assert.ok(seen.includes('isDirty'));
+    assert.ok(seen.includes('trackedDirty'));
   });
 });

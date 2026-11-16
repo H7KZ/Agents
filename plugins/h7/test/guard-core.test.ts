@@ -6,6 +6,7 @@ import { defaultDeps, readAll, run, type GuardIo } from '../scripts/guard-core.t
 import type { Runner } from '../scripts/git.ts';
 import { logPath } from '../scripts/log.ts';
 import { cleanupTmp, tmpDir, writeTree } from '../../../scripts/test/helpers.ts';
+import { repoDisk } from './support.ts';
 
 cleanupTmp();
 
@@ -22,6 +23,7 @@ function io(over: Partial<GuardIo> & { command?: string; tool?: string; cwd?: un
     platform: 'posix',
     runner,
     realpath: (p) => p,
+    disk: repoDisk,
     homedir: '/nonexistent-home',
     fallbackCwd: '/fallback',
     now: () => new Date('2026-02-03T04:05:06.000Z'),

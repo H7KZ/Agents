@@ -27,47 +27,79 @@ function fakeDisk(files: Record<string, string>, dirs: string[] = []): Disk {
 }
 
 describe('createGit with a fake runner', () => {
+  const repoDisk = (extra: Record<string, string> = {}) =>
+    fakeDisk({ '/r/.git/HEAD': 'ref: refs/heads/feature\n', '/r/.git/refs/remotes/origin/HEAD': 'ref: refs/remotes/origin/main\n', ...extra }, ['/r/.git']);
+
   it('parses the repo root and reads branch refs from disk, not from git', () => {
     const { run, calls } = recorder({ 'rev-parse --show-toplevel': { status: 0, stdout: '/r\n' } });
-    const disk = fakeDisk({ '/r/.git/HEAD': 'ref: refs/heads/feature\n', '/r/.git/refs/remotes/origin/HEAD': 'ref: refs/remotes/origin/main\n' }, ['/r/.git']);
-    const g = createGit(run, disk);
+    const g = createGit(run, repoDisk());
     assert.equal(g.repoRoot('/r'), '/r');
     assert.equal(g.currentBranch('/r'), 'feature');
     assert.equal(g.defaultBranch('/r', 'origin'), 'main');
     assert.deepEqual(calls, ['/r|rev-parse --show-toplevel']);
   });
 
-  it('returns null or empty on failure and empty output', () => {
-    const g = createGit(recorder({ 'rev-parse --show-toplevel': { status: 0, stdout: '\n' } }).run, fakeDisk({}));
+  it('answers "not a repository" from disk without spawning git', () => {
+    const { run, calls } = recorder({});
+    const g = createGit(run, fakeDisk({}));
     assert.equal(g.repoRoot('/x'), null);
     assert.equal(g.currentBranch('/x'), null);
     assert.equal(g.defaultBranch('/x', 'origin'), null);
-    assert.equal(g.isDirty('/x'), false);
+    assert.equal(g.trackedDirty('/x'), false);
     assert.deepEqual(g.stagedFiles('/x'), []);
     assert.deepEqual(g.modifiedFiles('/x'), []);
     assert.deepEqual(g.untrackedFiles('/x'), []);
+    assert.deepEqual(g.ignoredFiles('/x'), []);
+    assert.deepEqual(calls, []);
   });
 
-  it('detects dirtiness and parses NUL separated lists', () => {
-    const { run } = recorder({
-      'status --porcelain': { status: 0, stdout: ' M a.ts\n' },
+  it('inside a repository every failure throws instead of reporting a clean tree', () => {
+    for (const status of [128, 1, null]) {
+      const failing = () => createGit(() => ({ status, stdout: '' }), repoDisk());
+      assert.throws(() => failing().repoRoot('/r'), /git rev-parse failed/, String(status));
+      assert.throws(() => failing().trackedDirty('/r'), /git rev-parse failed/);
+    }
+    const empty = createGit(() => ({ status: 0, stdout: '\n' }), repoDisk());
+    assert.throws(() => empty.repoRoot('/r'), /no repository root/);
+  });
+
+  it('each query throws when its own git command fails', () => {
+    const run: Runner = (args) => (args[0] === 'rev-parse' ? { status: 0, stdout: '/r\n' } : { status: 128, stdout: 'partial\0' });
+    for (const query of ['trackedDirty', 'stagedFiles', 'modifiedFiles', 'untrackedFiles', 'ignoredFiles'] as const) {
+      const g = createGit(run, repoDisk());
+      assert.throws(() => g[query]('/r'), /failed \(status 128\)/, query);
+    }
+  });
+
+  it('detects tracked dirtiness and parses NUL separated lists from the repository root', () => {
+    const { run, calls } = recorder({
+      'rev-parse --show-toplevel': { status: 0, stdout: '/r\n' },
+      'status --porcelain --untracked-files=no': { status: 0, stdout: ' M a.ts\n' },
       'diff --cached --name-only --diff-filter=d -z': { status: 0, stdout: 'a b.ts\0.env\0' },
-      'diff --name-only --relative --diff-filter=d -z': { status: 0, stdout: 'x\0' },
+      'diff --name-only --diff-filter=d -z': { status: 0, stdout: 'x\0' },
       'ls-files --others --exclude-standard -z': { status: 0, stdout: 'y\0z\0' },
+      'ls-files --others --ignored --exclude-standard --directory -z': { status: 0, stdout: 'node_modules/\0.env\0' },
     });
-    const g = createGit(run);
-    assert.equal(g.isDirty('/x'), true);
-    assert.deepEqual(g.stagedFiles('/x'), ['a b.ts', '.env']);
-    assert.deepEqual(g.modifiedFiles('/x'), ['x']);
-    assert.deepEqual(g.untrackedFiles('/x'), ['y', 'z']);
+    const g = createGit(run, repoDisk());
+    assert.equal(g.trackedDirty('/r/sub'), true);
+    assert.deepEqual(g.stagedFiles('/r/sub'), ['a b.ts', '.env']);
+    assert.deepEqual(g.modifiedFiles('/r/sub'), ['x']);
+    assert.deepEqual(g.untrackedFiles('/r/sub'), ['y', 'z']);
+    assert.deepEqual(g.ignoredFiles('/r/sub'), ['node_modules/', '.env']);
+    assert.ok(calls.filter((c) => !c.includes('rev-parse')).every((c) => c.startsWith('/r|')));
+  });
+
+  it('a clean tracked tree is not dirty', () => {
+    const run: Runner = (args) => (args[0] === 'rev-parse' ? { status: 0, stdout: '/r' } : { status: 0, stdout: '\n' });
+    assert.equal(createGit(run, repoDisk()).trackedDirty('/r'), false);
   });
 
   it('memoises per method, directory and argument', () => {
     const { run, calls } = recorder({ 'rev-parse --show-toplevel': { status: 0, stdout: '/r' } });
-    const g = createGit(run);
-    g.repoRoot('/a');
-    g.repoRoot('/a');
-    g.repoRoot('/b');
+    const g = createGit(run, repoDisk());
+    g.repoRoot('/r');
+    g.repoRoot('/r');
+    g.repoRoot('/r/sub');
     assert.equal(calls.length, 2);
     let reads = 0;
     const disk: Disk = { kind: () => null, read: () => { reads++; return null; } };
@@ -182,7 +214,7 @@ describe('spawnRunner against real repositories', SLOW, () => {
     const dir = initRepo(tmpDir());
     const g = createGit(spawnRunner);
     assert.equal(g.currentBranch(dir), 'main');
-    assert.equal(g.isDirty(dir), false);
+    assert.equal(g.trackedDirty(dir), false);
     assert.equal(g.defaultBranch(dir, 'origin'), null);
     writeFileSync(join(dir, 'README.md'), 'changed\n');
     mkdirSync(join(dir, 'sub'));
@@ -190,11 +222,11 @@ describe('spawnRunner against real repositories', SLOW, () => {
     writeFileSync(join(dir, 'staged.key'), 'k\n');
     git(dir, 'add', 'staged.key');
     const fresh = createGit(spawnRunner);
-    assert.equal(fresh.isDirty(dir), true);
+    assert.equal(fresh.trackedDirty(dir), true);
     assert.deepEqual(fresh.stagedFiles(dir), ['staged.key']);
     assert.deepEqual(fresh.modifiedFiles(dir), ['README.md']);
     assert.deepEqual(fresh.untrackedFiles(dir), ['sub/.env']);
-    assert.deepEqual(fresh.modifiedFiles(join(dir, 'sub')), []);
+    assert.deepEqual(fresh.modifiedFiles(join(dir, 'sub')), ['README.md']);
     git(dir, 'rm', '-q', '--cached', 'staged.key');
     git(dir, 'checkout', '-q', '--detach');
     assert.equal(createGit(spawnRunner).currentBranch(dir), null);

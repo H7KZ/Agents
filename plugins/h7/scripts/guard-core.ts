@@ -1,12 +1,15 @@
 import { realpathSync } from 'node:fs';
 import { homedir } from 'node:os';
 import { createGit, spawnRunner, type Runner } from './git.ts';
+import type { Disk } from './gitfiles.ts';
 import { appendDisabledOnce, appendLog, type LogEntry } from './log.ts';
 import { makePaths, type Realpath } from './paths.ts';
 import { pickDecision, scan } from './scan.ts';
 import type { Ctx, Decision } from './types.ts';
 
 export interface Deps {
+  /** Filesystem view; defaults to the real disk. */
+  disk?: Disk;
   platform: string;
   runner: Runner;
   realpath: Realpath;
@@ -74,7 +77,7 @@ export function run(stdinText: string, env: Record<string, string | undefined>, 
     }
     command = text;
     cwd = typeof input.cwd === 'string' && input.cwd !== '' ? input.cwd : io.fallbackCwd;
-    const ctx: Ctx = { cwd, home, paths: makePaths(io.platform === 'win32' ? 'win32' : 'posix', io.realpath), git: createGit(io.runner) };
+    const ctx: Ctx = { cwd, home, paths: makePaths(io.platform === 'win32' ? 'win32' : 'posix', io.realpath), git: createGit(io.runner, io.disk) };
     const decision = pickDecision(scan(command, input.tool_name === 'PowerShell' ? 'ps' : 'sh', ctx, { cwd, env: {} }));
     if (decision === null) return ALLOW;
     return respond(decision, appendLog(home, entry(decision.decision, decision.rule, command, cwd)));

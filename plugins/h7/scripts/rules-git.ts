@@ -120,7 +120,7 @@ function lostWork(sub: string, parsed: ParsedArgs): string | null {
 
 function destructive(call: GitCall, ctx: Ctx): Decision | null {
   const what = lostWork(call.sub, parseArgs(call.args, DESTRUCTIVE_SPECS.get(call.sub)));
-  if (what === null || !ctx.git.isDirty(call.cwd)) return null;
+  if (what === null || !ctx.git.trackedDirty(call.cwd)) return null;
   return block(
     'destructive-git-dirty',
     `${what} would destroy uncommitted changes. Commit them or run "git stash push -u" first; the command is allowed once the worktree is clean.`,
