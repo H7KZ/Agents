@@ -77,6 +77,9 @@ scripts/                          repo tooling: lint-skills.ts, check-manifests.
 | CI verdict from checks, review threads and mergeability: READY only with nothing failing, pending, conflicting or unresolved; one rerun per failure per head, stale base and real failure separated; never recommends merging | `test/plugin/ci-verdict.test.ts` (property tests) |
 | `ci-watch.ts` shells out to `gh` only through an injected runner, absolute PATH entries only, no shell; missing or unauthenticated gh, bad output and unreadable threads give BLOCKED, never a guess; rerun recorded before it is requested | `test/plugin/ci-watch.test.ts` |
 | `/h7:ship` registers the Stop gate in its own frontmatter, has all PR body sections, never pushes or merges unasked | `scripts/lint-skills.ts`, `test/plugin/ship-skill.test.ts` |
+| Run journal: append-only JSONL under the repo's `.h7/runs`, run ids are one path segment, symlinks refused, secrets and URL credentials redacted before write, oversized events truncated, corrupt lines skipped | `test/plugin/run-journal.test.ts`, `run-journal-core.test.ts` (property tests) |
+| Loop brake: round score (failing layers + unresolved findings) from the journal, stop after 5 consecutive non-improving rounds | `test/plugin/run-journal-core.test.ts` (property tests) |
+| `/h7:work` registers the Stop gate in its own frontmatter, loads phase skills by path, never pushes unasked | `scripts/lint-skills.ts`, `test/plugin/work-skill.test.ts` |
 | Skills never auto-trigger | `scripts/lint-skills.ts` |
 | AGENTS.md at most 150 lines | none yet |
 | Conventional Commits | none yet |
