@@ -20,6 +20,8 @@ Every correction becomes a deterministic check. Verification evidence replaces l
 
 Every phase is also its own command: `/h7:setup`, `/h7:verify`, `/h7:review`, `/h7:ship`, `/h7:retro`, `/h7:improve`.
 
+`/h7:verify` helpers (`plugins/h7/scripts/`): `verify-scope.ts` (changed files and line ranges vs merge base, JSON), `diff-coverage.ts` (lcov vs that scope: diff line and branch %, global-drop check), `verify-state.ts` (`.h7/verify.json`, one record per bar layer: pass, fail, na with reason), `verify-gate.ts` (Stop hook that blocks while that record is incomplete; fails open on internal error, honors `stop_hook_active`, gives up after 5 blocks or 12 h; registered only from `/h7:work` and `/h7:ship` frontmatter).
+
 ## Decisions
 
 | # | Area | Decision |

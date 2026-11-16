@@ -9,7 +9,7 @@ This repo is the `h7kz` Claude Code plugin marketplace with one plugin, `h7`: a 
 .claude-plugin/marketplace.json   marketplace "h7kz" -> plugins/h7
 plugins/h7/.claude-plugin/        plugin.json (name "h7", NO version)
 plugins/h7/hooks/hooks.json       PreToolUse safety guard (exec form: node + args)
-plugins/h7/scripts/*.ts           runtime code (guard, doctor, helpers)
+plugins/h7/scripts/*.ts           runtime code (guard, doctor, verify helpers)
 plugins/h7/skills/<name>/SKILL.md user-invoked skills (/h7:<name>)
 test/plugin/                      node:test suites (*.test.ts fast, *.e2e.ts slow subprocess)
 bootstrap/                        install.ps1, install.sh, configure.ts (+ test/); --dev links plugins/h7 for live edits
@@ -66,6 +66,9 @@ scripts/                          repo tooling: lint-skills.ts, check-manifests.
 | Bootstrap idempotent, backs up the original settings, atomic write, confirms before cleanup | `bootstrap/test/configure.test.ts` |
 | Zero deps in plugin, `node:`-only runtime imports, exec-form hooks | `scripts/check-manifests.ts` |
 | Doctor reports dev vs marketplace mode, never both | `test/plugin/doctor.test.ts` |
+| `/h7:verify` scopes the bar to the change: files and line ranges vs merge base, diff line and branch coverage from lcov, global-drop check | `test/plugin/verify-scope.test.ts`, `diff-coverage.test.ts`, `verify-skill.test.ts` |
+| Stop gate blocks only while `.h7/verify.json` is incomplete; fails open on internal errors, honors `stop_hook_active`, caps its own blocks; registered by work/ship frontmatter only, never in `hooks.json` | `test/plugin/verify-gate.test.ts`, `verify-state.test.ts`, `verify-skill.test.ts` |
+| Repo-configured textconv and attribute drivers never run in h7 diffs | `test/plugin/verify-scope.test.ts`, `git.test.ts` |
 | Skills never auto-trigger | `scripts/lint-skills.ts` |
 | AGENTS.md at most 150 lines | none yet |
 | Conventional Commits | none yet |
