@@ -1,12 +1,12 @@
 import assert from 'node:assert/strict';
 import { describe, it } from 'node:test';
 import fc from 'fast-check';
-import { expandBraces, MAX_GROUPS, MAX_WORD_LENGTH } from '../scripts/braces.ts';
-import { run, type GuardIo } from '../scripts/guard-core.ts';
+import { expandBraces, MAX_GROUPS, MAX_WORD_LENGTH } from '../../plugins/h7/scripts/braces.ts';
+import { run, type GuardIo } from '../../plugins/h7/scripts/guard-core.ts';
 
 const runGuard = (setup: GuardIo) => run(setup.stdin, setup.env, setup);
-import { createGit, makeSpawnRunner, type Runner } from '../scripts/git.ts';
-import { cleanupTmp, tmpDir, runs } from '../../../scripts/test/helpers.ts';
+import { createGit, makeSpawnRunner, type Runner } from '../../plugins/h7/scripts/git.ts';
+import { cleanupTmp, tmpDir, runs } from '../../scripts/test/helpers.ts';
 import { repoDisk, ruleOf } from './support.ts';
 
 cleanupTmp();

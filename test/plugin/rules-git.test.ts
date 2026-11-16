@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict';
 import { describe, it } from 'node:test';
 import fc from 'fast-check';
-import { secretKind } from '../scripts/rules-git.ts';
+import { secretKind } from '../../plugins/h7/scripts/rules-git.ts';
 import { decide, ruleOf, type Calls } from './support.ts';
 
 const BLOCK_FORCE = 'block:force-push-protected';

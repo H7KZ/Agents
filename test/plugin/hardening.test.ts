@@ -1,8 +1,8 @@
 import assert from 'node:assert/strict';
 import { describe, it } from 'node:test';
-import { classifySecret } from '../scripts/rules-git.ts';
-import { pickDecision, scan } from '../scripts/scan.ts';
-import { newState } from '../scripts/types.ts';
+import { classifySecret } from '../../plugins/h7/scripts/rules-git.ts';
+import { pickDecision, scan } from '../../plugins/h7/scripts/scan.ts';
+import { newState } from '../../plugins/h7/scripts/types.ts';
 import { decide, makeCtx, ruleOf, type Options } from './support.ts';
 
 const FORCE = 'block:force-push-protected';

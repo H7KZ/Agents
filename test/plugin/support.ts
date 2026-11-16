@@ -1,9 +1,9 @@
-import type { Disk } from '../scripts/gitfiles.ts';
-import type { Git } from '../scripts/git.ts';
-import { makePaths, type Platform } from '../scripts/paths.ts';
-import { pickDecision, scan } from '../scripts/scan.ts';
-import { newState, type Ctx, type Decision, type ScanState } from '../scripts/types.ts';
-import type { Dialect } from '../scripts/tokenize.ts';
+import type { Disk } from '../../plugins/h7/scripts/gitfiles.ts';
+import type { Git } from '../../plugins/h7/scripts/git.ts';
+import { makePaths, type Platform } from '../../plugins/h7/scripts/paths.ts';
+import { pickDecision, scan } from '../../plugins/h7/scripts/scan.ts';
+import { newState, type Ctx, type Decision, type ScanState } from '../../plugins/h7/scripts/types.ts';
+import type { Dialect } from '../../plugins/h7/scripts/tokenize.ts';
 
 export interface FakeGitState {
   root?: string | null;

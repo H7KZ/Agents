@@ -2,9 +2,9 @@ import assert from 'node:assert/strict';
 import { mkdirSync, writeFileSync } from 'node:fs';
 import { delimiter, join } from 'node:path';
 import { describe, it } from 'node:test';
-import { createGit, hardenedEnv, makeSpawnRunner, resolveGitPath, spawnRunner, type RunResult, type Runner } from '../scripts/git.ts';
-import { currentBranchOnDisk, findGitDirs, realDisk, remoteHeadOnDisk, type Disk } from '../scripts/gitfiles.ts';
-import { SLOW, cleanupTmp, git, initRepo, tmpDir, writeTree } from '../../../scripts/test/helpers.ts';
+import { createGit, hardenedEnv, makeSpawnRunner, resolveGitPath, spawnRunner, type RunResult, type Runner } from '../../plugins/h7/scripts/git.ts';
+import { currentBranchOnDisk, findGitDirs, realDisk, remoteHeadOnDisk, type Disk } from '../../plugins/h7/scripts/gitfiles.ts';
+import { SLOW, cleanupTmp, git, initRepo, tmpDir, writeTree } from '../../scripts/test/helpers.ts';
 
 cleanupTmp();
 

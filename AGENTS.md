@@ -11,7 +11,7 @@ plugins/h7/.claude-plugin/        plugin.json (name "h7", NO version)
 plugins/h7/hooks/hooks.json       PreToolUse safety guard (exec form: node + args)
 plugins/h7/scripts/*.ts           runtime code (guard, doctor, helpers)
 plugins/h7/skills/<name>/SKILL.md user-invoked skills (/h7:<name>)
-plugins/h7/test/                  node:test suites (*.test.ts fast, *.e2e.ts slow subprocess)
+test/plugin/                      node:test suites (*.test.ts fast, *.e2e.ts slow subprocess)
 bootstrap/                        install.ps1, install.sh, configure.ts (+ test/)
 scripts/                          repo tooling: lint-skills.ts, check-manifests.ts (+ test/)
 ```
@@ -47,7 +47,7 @@ scripts/                          repo tooling: lint-skills.ts, check-manifests.
 |---|---|
 | Erasable TS syntax, `.ts` import extensions | `npm run typecheck` (tsconfig: erasableSyntaxOnly, allowImportingTsExtensions, strict) |
 | Zero runtime deps in plugin | `plugins/h7/package.json` has no dependencies; imports are `node:` only (typecheck fails on missing modules) |
-| Hooks in exec form, script exists | `scripts/check-manifests.ts` (hook args under `${CLAUDE_PLUGIN_ROOT}` must exist); `plugins/h7/test/guard-core.test.ts` asserts hooks.json shape |
+| Hooks in exec form, script exists | `scripts/check-manifests.ts` (hook args under `${CLAUDE_PLUGIN_ROOT}` must exist); `test/plugin/guard-core.test.ts` asserts hooks.json shape |
 | No `version` in plugin.json, names match | `scripts/check-manifests.ts` |
 | Valid JSON manifests | `scripts/check-manifests.ts`; `claude plugin validate` in CI |
 | Skills: name equals dir, description at most 1024, user-only, at most 500 lines, links resolve | `scripts/lint-skills.ts` (`npm run lint:skills`) |
@@ -55,13 +55,13 @@ scripts/                          repo tooling: lint-skills.ts, check-manifests.
 | 100% coverage | `npm run test:coverage` (CI, all 6 matrix cells) |
 | Mutation score at least 80 | `npm run mutation` (CI job) |
 | Works on Windows, macOS, Linux, Node 22.18 and 24 | `.github/workflows/ci.yml` matrix |
-| Guard blocks force push to protected branches (and deleting them), hook skipping (flags, abbreviations, core.hooksPath outside the repo; inside the repo only .husky, .githooks, .git/hooks pass, others ask), destructive git on a dirty tree (tracked changes; untracked for `git clean`), secret commits (high-confidence names, `.pem` with a private key), recursive deletes outside repo, `rm -rf .git`, `find -delete` outside repo | `plugins/h7/test/rules-*.test.ts`, `hardening.test.ts`, `uncertainty.test.ts`, `guard.e2e.ts` |
-| Guard asks for protected pushes, deploy/publish (option-aware, wrappers, `--dry-run` allowed), ambiguous secrets, history rewrites, stash drop, git aliases | `plugins/h7/test/rules-git.test.ts`, `rules-deploy.test.ts`, `hardening.test.ts` |
-| Guard asks on what it cannot resolve: git failing or missing, shell/interpreter stdin, `xargs`, `iex`, variable command words, `cd x || ...`, unresolved targets | `plugins/h7/test/failsafe.test.ts`, `hardening.test.ts`, `uncertainty.test.ts`, `braces.test.ts` |
-| Guard state across a chain (branch, stash, cd, staged files; subshells isolated) | `plugins/h7/test/hardening.test.ts` |
-| Non-git commands never spawn git | `plugins/h7/test/failsafe.test.ts` |
-| Guard log has no secrets, private permissions | `plugins/h7/test/log.test.ts` (property test) |
-| Git is run safely in untrusted repos | `plugins/h7/test/git.test.ts` |
+| Guard blocks force push to protected branches (and deleting them), hook skipping (flags, abbreviations, core.hooksPath outside the repo; inside the repo only .husky, .githooks, .git/hooks pass, others ask), destructive git on a dirty tree (tracked changes; untracked for `git clean`), secret commits (high-confidence names, `.pem` with a private key), recursive deletes outside repo, `rm -rf .git`, `find -delete` outside repo | `test/plugin/rules-*.test.ts`, `hardening.test.ts`, `uncertainty.test.ts`, `guard.e2e.ts` |
+| Guard asks for protected pushes, deploy/publish (option-aware, wrappers, `--dry-run` allowed), ambiguous secrets, history rewrites, stash drop, git aliases | `test/plugin/rules-git.test.ts`, `rules-deploy.test.ts`, `hardening.test.ts` |
+| Guard asks on what it cannot resolve: git failing or missing, shell/interpreter stdin, `xargs`, `iex`, variable command words, `cd x || ...`, unresolved targets | `test/plugin/failsafe.test.ts`, `hardening.test.ts`, `uncertainty.test.ts`, `braces.test.ts` |
+| Guard state across a chain (branch, stash, cd, staged files; subshells isolated) | `test/plugin/hardening.test.ts` |
+| Non-git commands never spawn git | `test/plugin/failsafe.test.ts` |
+| Guard log has no secrets, private permissions | `test/plugin/log.test.ts` (property test) |
+| Git is run safely in untrusted repos | `test/plugin/git.test.ts` |
 | Bootstrap idempotent, backs up settings, confirms before cleanup | `bootstrap/test/configure.test.ts` |
 | Skills never auto-trigger | `scripts/lint-skills.ts` |
 | AGENTS.md at most 150 lines | none yet |

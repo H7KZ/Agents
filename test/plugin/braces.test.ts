@@ -1,8 +1,8 @@
-import { runs } from '../../../scripts/test/helpers.ts';
+import { runs } from '../../scripts/test/helpers.ts';
 import assert from 'node:assert/strict';
 import { describe, it } from 'node:test';
 import fc from 'fast-check';
-import { expandBraces } from '../scripts/braces.ts';
+import { expandBraces } from '../../plugins/h7/scripts/braces.ts';
 import { ruleOf } from './support.ts';
 
 const BLOCK = 'block:recursive-delete';

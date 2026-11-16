@@ -2,10 +2,10 @@ import assert from 'node:assert/strict';
 import { readFileSync, realpathSync } from 'node:fs';
 import { join } from 'node:path';
 import { describe, it } from 'node:test';
-import { defaultDeps, readAll, run, type GuardIo } from '../scripts/guard-core.ts';
-import type { Runner } from '../scripts/git.ts';
-import { logPath } from '../scripts/log.ts';
-import { cleanupTmp, tmpDir, writeTree } from '../../../scripts/test/helpers.ts';
+import { defaultDeps, readAll, run, type GuardIo } from '../../plugins/h7/scripts/guard-core.ts';
+import type { Runner } from '../../plugins/h7/scripts/git.ts';
+import { logPath } from '../../plugins/h7/scripts/log.ts';
+import { cleanupTmp, tmpDir, writeTree } from '../../scripts/test/helpers.ts';
 import { repoDisk } from './support.ts';
 
 cleanupTmp();
@@ -198,7 +198,7 @@ describe('runGuard kill switch and failure handling', () => {
 
 describe('hooks.json', () => {
   it('registers the guard in exec form for Bash and PowerShell', () => {
-    const file = join(import.meta.dirname, '..', 'hooks', 'hooks.json');
+    const file = join(import.meta.dirname, '..', '..', 'plugins', 'h7', 'hooks', 'hooks.json');
     const config = JSON.parse(readFileSync(file, 'utf8'));
     const [entry] = config.hooks.PreToolUse;
     assert.equal(entry.matcher, 'Bash|PowerShell');

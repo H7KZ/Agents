@@ -3,8 +3,8 @@ import { mkdirSync, symlinkSync } from 'node:fs';
 import { join } from 'node:path';
 import { describe, it } from 'node:test';
 import fc from 'fast-check';
-import { main, nodeAtLeast, runChecks, spawnRun, summarize, type Check, type DoctorEnv, type RunResult } from '../scripts/doctor.ts';
-import { SLOW, cleanupTmp, runNode, tmpDir, writeTree } from '../../../scripts/test/helpers.ts';
+import { main, nodeAtLeast, runChecks, spawnRun, summarize, type Check, type DoctorEnv, type RunResult } from '../../plugins/h7/scripts/doctor.ts';
+import { SLOW, cleanupTmp, runNode, tmpDir, writeTree } from '../../scripts/test/helpers.ts';
 
 cleanupTmp();
 
@@ -191,7 +191,7 @@ describe('spawnRun', SLOW, () => {
 });
 
 describe('doctor.ts as a subprocess', SLOW, () => {
-  const script = join(import.meta.dirname, '..', 'scripts', 'doctor.ts');
+  const script = join(import.meta.dirname, '..', '..', 'plugins', 'h7', 'scripts', 'doctor.ts');
 
   it('emits JSON for an empty home using H7_HOME', () => {
     const home = tmpDir();

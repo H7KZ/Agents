@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict';
 import { describe, it } from 'node:test';
-import { scan } from '../scripts/scan.ts';
-import { newState } from '../scripts/types.ts';
+import { scan } from '../../plugins/h7/scripts/scan.ts';
+import { newState } from '../../plugins/h7/scripts/types.ts';
 import { makeCtx, ruleOf, type Options } from './support.ts';
 
 const DIRTY = 'block:destructive-git-dirty';

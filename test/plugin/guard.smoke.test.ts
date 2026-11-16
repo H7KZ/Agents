@@ -2,11 +2,11 @@ import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { describe, it } from 'node:test';
-import { SLOW, cleanupTmp, runNode, tmpDir } from '../../../scripts/test/helpers.ts';
+import { SLOW, cleanupTmp, runNode, tmpDir } from '../../scripts/test/helpers.ts';
 
 cleanupTmp();
 
-const script = join(import.meta.dirname, '..', 'scripts', 'guard.ts');
+const script = join(import.meta.dirname, '..', '..', 'plugins', 'h7', 'scripts', 'guard.ts');
 
 function run(command: string, extra: Record<string, string> = {}, tool = 'Bash') {
   const home = tmpDir('h7-home-');

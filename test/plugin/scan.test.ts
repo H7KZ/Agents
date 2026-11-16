@@ -1,9 +1,9 @@
-import { runs } from '../../../scripts/test/helpers.ts';
+import { runs } from '../../scripts/test/helpers.ts';
 import assert from 'node:assert/strict';
 import { describe, it } from 'node:test';
 import fc from 'fast-check';
-import { pickDecision, scan } from '../scripts/scan.ts';
-import { ask, block, newState } from '../scripts/types.ts';
+import { pickDecision, scan } from '../../plugins/h7/scripts/scan.ts';
+import { ask, block, newState } from '../../plugins/h7/scripts/types.ts';
 import { decide, makeCtx, ruleOf } from './support.ts';
 
 describe('pickDecision', () => {

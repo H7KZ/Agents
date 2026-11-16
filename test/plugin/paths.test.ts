@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict';
 import { describe, it } from 'node:test';
 import fc from 'fast-check';
-import { makePaths } from '../scripts/paths.ts';
+import { makePaths } from '../../plugins/h7/scripts/paths.ts';
 
 const posix = makePaths('posix', (p) => p);
 const win = makePaths('win32', (p) => p);

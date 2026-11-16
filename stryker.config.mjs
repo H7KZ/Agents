@@ -6,7 +6,7 @@ process.env.H7_MUTATION = '1';
 export default {
   testRunner: 'tap',
   tap: {
-    testFiles: ['plugins/h7/test/**/*.test.ts', 'scripts/test/**/*.test.ts', 'bootstrap/test/**/*.test.ts'],
+    testFiles: ['test/plugin/**/*.test.ts', 'scripts/test/**/*.test.ts', 'bootstrap/test/**/*.test.ts'],
     nodeArgs: ['--import', './scripts/test/mutation-setup.ts', '--test-reporter=tap'],
   },
   mutate: ['plugins/h7/scripts/**/*.ts', 'scripts/**/*.ts', 'bootstrap/**/*.ts', '!**/test/**', '!**/*.test.ts'],

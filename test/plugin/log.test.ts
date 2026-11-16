@@ -3,8 +3,8 @@ import { mkdirSync, readFileSync, statSync, writeFileSync } from 'node:fs';
 import fc from 'fast-check';
 import { join } from 'node:path';
 import { describe, it } from 'node:test';
-import { appendDisabledOnce, appendLog, logPath, redact, type LogEntry } from '../scripts/log.ts';
-import { cleanupTmp, tmpDir, runs } from '../../../scripts/test/helpers.ts';
+import { appendDisabledOnce, appendLog, logPath, redact, type LogEntry } from '../../plugins/h7/scripts/log.ts';
+import { cleanupTmp, tmpDir, runs } from '../../scripts/test/helpers.ts';
 
 cleanupTmp();
 

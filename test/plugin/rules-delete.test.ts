@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict';
 import { describe, it } from 'node:test';
 import fc from 'fast-check';
-import { isDeleter } from '../scripts/rules-delete.ts';
+import { isDeleter } from '../../plugins/h7/scripts/rules-delete.ts';
 import { decide, ruleOf, type Options } from './support.ts';
 
 const BLOCK = 'block:recursive-delete';

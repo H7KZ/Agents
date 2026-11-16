@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict';
 import { describe, it } from 'node:test';
 import fc from 'fast-check';
-import { assignmentsOf, commandName, nestedScript, parseArgs, parseSimple } from '../scripts/command.ts';
+import { assignmentsOf, commandName, nestedScript, parseArgs, parseSimple } from '../../plugins/h7/scripts/command.ts';
 
 const simple = (...words: string[]) => {
   const { raw: _raw, ...rest } = parseSimple(words);

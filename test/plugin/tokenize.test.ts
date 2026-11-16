@@ -1,8 +1,8 @@
-import { runs } from '../../../scripts/test/helpers.ts';
+import { runs } from '../../scripts/test/helpers.ts';
 import assert from 'node:assert/strict';
 import { describe, it } from 'node:test';
 import fc from 'fast-check';
-import { tokenize, type Dialect } from '../scripts/tokenize.ts';
+import { tokenize, type Dialect } from '../../plugins/h7/scripts/tokenize.ts';
 
 const words = (input: string, dialect: Dialect = 'sh'): string[][] => tokenize(input, dialect).segments;
 const nested = (input: string, dialect: Dialect = 'sh'): string[] => tokenize(input, dialect).nested;

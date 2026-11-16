@@ -2,11 +2,11 @@ import assert from 'node:assert/strict';
 import { mkdirSync, readFileSync, symlinkSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { describe, it } from 'node:test';
-import { cleanupTmp, git, initRepo, runNode, tmpDir } from '../../../scripts/test/helpers.ts';
+import { cleanupTmp, git, initRepo, runNode, tmpDir } from '../../scripts/test/helpers.ts';
 
 cleanupTmp();
 
-const script = join(import.meta.dirname, '..', 'scripts', 'guard.ts');
+const script = join(import.meta.dirname, '..', '..', 'plugins', 'h7', 'scripts', 'guard.ts');
 
 interface Run {
   status: number | null;

@@ -16,6 +16,6 @@
     "skipLibCheck": true,
     "forceConsistentCasingInFileNames": true
   },
-  "include": ["plugins/h7/scripts/**/*.ts", "plugins/h7/test/**/*.ts", "scripts/**/*.ts", "bootstrap/**/*.ts"],
+  "include": ["plugins/h7/scripts/**/*.ts", "test/**/*.ts", "scripts/**/*.ts", "bootstrap/**/*.ts"],
   "exclude": ["**/fixtures/**", "node_modules", ".stryker-tmp"]
 }

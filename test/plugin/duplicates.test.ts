@@ -2,8 +2,8 @@ import assert from 'node:assert/strict';
 import { mkdirSync, symlinkSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { describe, it } from 'node:test';
-import { duplicateSkillLinks, installedPlugins, readJson } from '../scripts/duplicates.ts';
-import { cleanupTmp, tmpDir, writeTree } from '../../../scripts/test/helpers.ts';
+import { duplicateSkillLinks, installedPlugins, readJson } from '../../plugins/h7/scripts/duplicates.ts';
+import { cleanupTmp, tmpDir, writeTree } from '../../scripts/test/helpers.ts';
 
 cleanupTmp();
 
