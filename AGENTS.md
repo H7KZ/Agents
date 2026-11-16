@@ -86,6 +86,11 @@ scripts/                          repo tooling: lint-skills.ts, check-manifests.
 | Improvement queue in `~/.h7/proposals` (`H7_HOME`): ids are one safe path segment, owner-only files, linked `.h7` refused, secrets redacted before write, decided once, nothing written outside the queue; the skill never pushes or edits other repos unasked | `test/plugin/proposals.test.ts` (property test), `improve-skill.test.ts` |
 | Formal models declare covered source globs and a sync commit; drift (committed, uncommitted, untracked, renamed files) is detected, dead globs and unknown sync commits never read as in sync, git failure is an error not a pass | `test/plugin/formal-drift.test.ts` (property tests, real-git run) |
 | Formal skills are opt-in, install only after asking, require a property shown failing on a broken variant, never weaken a property | `scripts/lint-skills.ts`, `test/plugin/formal-skills.test.ts` |
+| Workspace mode: one resolver (`workspace.ts`) for state dir, settings, base and memory names; strict bounded marker parse, symlink and escape refusal, marker only inside the real home and above the repo, POSIX owner and mode checks, errors never silent fallbacks; no marker keeps the in-repo state; nothing written in a repo in workspace mode (status, exclude and worktrees unchanged) | `test/plugin/workspace.test.ts` (property tests), `workspace-wiring.test.ts`, `baseline-tree.test.ts`, `workspace-skill.test.ts` |
+| Marker is guard policy: scratch, push and auto-merge only for a hash-trusted marker (TTY-confirmed `workspace.ts trust`), listing the repo, outside every git work tree, no `.git` under scratch; agents cannot write the marker | `test/plugin/workspace.test.ts`, `wsl.test.ts`, `marker-guard.test.ts` |
+| Guard scans `wsl.exe --exec` like the direct command and asks on `--`, bare commands and unknown options, never weaker than the plain parse | `test/plugin/wsl.test.ts` (property tests) |
+| Doctor validates the workspace marker and trust, finds unmarked mattpocock skill copies, warns on reviewer == author | `test/plugin/doctor-workspace.test.ts` |
+| Base branch falls back to the marker, `origin/HEAD`, then main, master, develop | `test/plugin/workspace-wiring.test.ts` |
 | Skills never auto-trigger | `scripts/lint-skills.ts` |
 | AGENTS.md at most 150 lines | none yet |
 | Conventional Commits | none yet |

@@ -36,7 +36,19 @@ A directory marketplace (`--local`) does NOT give live edits: Claude Code copies
 added for h7 and `h7@h7kz` is uninstalled, otherwise h7 and its hook would load twice. Run `/reload-plugins` after edits.
 Evidence: [ADR 0003](docs/adr/0003-sync-marketplace-plugin.md). `/h7:doctor` reports which mode is active and fails if both are.
 
-Without the bootstrap: `claude plugin marketplace add H7KZ/Agents` then `claude plugin install h7@h7kz`.
+Without the bootstrap: `claude plugin marketplace add H7KZ/Agents` then `claude plugin install h7@h7kz`. A plain `marketplace add` leaves `autoUpdate` off, so `/h7:doctor` fails the `auto-update` check until you set `extraKnownMarketplaces.h7kz.autoUpdate` to `true` in `~/.claude/settings.json` (the bootstrap does this).
+
+### Workspace mode (team repos)
+
+When h7 is only your personal workflow and the repos belong to a team, nothing of h7 may land in them. Put a `.h7-workspace.json` in a folder above the repos (inside your home, owned by you, not writable by others):
+
+```json
+{ "version": 1, "stateDir": ".h7", "scratch": "tmp",
+  "repos": { "web": { "base": "develop", "verification": "docs/agents/verification-web.md", "prTemplate": "docs/pull-requests.md", "ship": "pr", "autoMerge": false } },
+  "memory": { "agents": "AGENTS.md", "glossary": "GLOSSARY.md", "adr": "docs/adr" } }
+```
+
+Then journals, verify and review state and CI watcher state live in `<workspace>/.h7/<repo>/`, setup writes only under the workspace (no branch, no commits in the repo), ship reads its settings from the workspace and follows `prTemplate`, and the coverage baseline is built from `git archive` in the OS temp dir. The marker can set a `scratch` dir, push and auto-merge, so those count only after you run `node <plugin>/scripts/workspace.ts trust` in a terminal (it shows the file and needs a typed yes; the hash is kept in an owner-only file under your `.h7` home folder). On Windows ownership cannot be checked, so there they stay off. `/h7:doctor` validates the marker and reports its trust state. Design: [docs/design.md](docs/design.md).
 
 ## Commands
 

@@ -55,6 +55,17 @@ Every phase is also its own command: `/h7:setup`, `/h7:verify`, `/h7:review`, `/
 | 14 | Learning loop | `/h7:retro`: proposes checks for the target repo (architecture → types → lint → test → prose), each proven against a real past mistake, user approves row by row, separate commits. h7 improvements queue in `~/.h7/proposals/`; `/h7:improve` in this repo drafts them, user approves. |
 | 15 | Build order | foundation → setup → verify → review → ship → driver → learning. First real target: a real web project. |
 
+## Workspace mode
+
+For team repos where h7 is one developer's personal workflow, `.h7-workspace.json` (version 1, `stateDir`, `repos{path:{base,verification,prTemplate,ship,autoMerge}}`, `memory{agents,glossary,adr}`, optional `scratch`) in an ancestor directory moves every h7 file out of the repo. One module, `scripts/workspace.ts`, owns discovery and every script uses it: `stateDir`, `settings`, `base`, `memory`. Rules:
+
+- Discovery walks from the real repo root up to, not including, the real home. A repo outside home gets no workspace mode. The nearest marker that lists the repo wins; a marker that is a symlink, too big, malformed, owned by someone else or group/world writable (POSIX) is an error, never a silent fallback. No marker: behaviour is unchanged (state in the repo, git-excluded).
+- In workspace mode nothing is written in the repo: no state dir, no exclude edit, no branch, no worktree (the coverage baseline is `git archive | tar -x` in the OS temp dir, `baseline-tree.ts`). Tests with real git repos assert `status --ignored`, the exclude file and `worktree list` are unchanged.
+- Base branch: `repos.<r>.base`, else `origin/HEAD`, else `origin/main`, `origin/master`, `main`, `master`, `origin/develop`, `develop`.
+- Trust: the marker can widen the guard (scratch) and set push and auto-merge, so those three apply only when the sha256 of its exact text is recorded in the owner-only `workspaces.json` under the user `.h7` home dir (written by `workspace.ts trust`, which needs a TTY and a typed yes), ownership is verified (POSIX; unverifiable on Windows, so off there), the marker sits strictly above the repo and lists it, and neither its directory nor the scratch dir lies in or holds a git work tree. Untrusted or changed: paths, base and memory names still work, and `doctor` says what to run. The guard blocks agent writes to the marker.
+- Guard: `wsl.exe` with `--exec`/`-e` is exact argv and scanned like the direct command (`bash -lc 'x'` as `bash -c 'x'`); `--`, a bare command, `--exec` with nothing, or an unknown option asks (the unquoted joined line is also scanned so a block still wins). Deletes strictly inside the trusted scratch dir count as inside the repo; hard blocks elsewhere are unchanged.
+- Doctor validates the marker (repos exist and are git repos, referenced files exist, no repo holds its own state dir or `docs/agents/`), reports the trust state, detects unmarked copies of mattpocock skills by name and content similarity, and warns when the reviewer model equals the author model.
+
 ## Repo layout
 
 ```

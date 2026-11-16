@@ -70,7 +70,14 @@ The loop stops itself after **5 non-improving rounds** and reports instead of gr
 | `.claude/skills/verify-*` | Repo-specific e2e skills with feature maps | yes |
 | `docs/formal/` | Formal models | yes |
 | `.h7/` | Run journals, verify and review state, CI watcher state | no (added to `.git/info/exclude`) |
-| `~/.h7/` | Guard log, guard ask-mode config, models.json, proposals | no (per machine, owner-only) |
+| `~/.h7/` | Guard log, guard ask-mode config, models.json, proposals, `workspaces.json` (hashes of workspace markers you trusted) | no (per machine, owner-only) |
+| `<workspace>/.h7-workspace.json` | Workspace mode: where state lives for team repos (see below) | no (your folder, not the repos) |
+
+### Workspace mode
+
+For a folder of team repos where h7 is only your workflow, put `.h7-workspace.json` (version, stateDir, repos with base, verification, prTemplate, ship, autoMerge, memory names, optional scratch) in a folder above them, inside your home. With it, `.h7/` state lives in `<ws>/.h7/<repo>/`, `/h7:setup` writes `verification-<repo>.md`, `verify-<repo>` and the AGENTS block under the workspace only (no branch, no commits in the repo), `/h7:ship` reads settings from the workspace and fills the PR body by your template headings, and `/h7:retro` edits the workspace `AGENTS.md`. Base branch: the marker, else `origin/HEAD`, else main, master, develop. Glossary: `CONTEXT.md`, or `GLOSSARY.md` when that exists. Run `node <plugin>/scripts/workspace.ts show` to see what resolved and `status` for trust.
+
+A marker is guard policy: scratch (deletes inside it count as inside the repo), push and auto-merge are honoured only after you run `workspace.ts trust` in a terminal (it shows the file and needs a typed yes; the hash goes to `workspaces.json` under your `~/.h7`). The file must be yours and not group or world writable, sit strictly above the repo inside your home and outside any git work tree. Agents cannot edit the marker (the guard blocks it); a changed marker is untrusted again. On Windows ownership cannot be verified, so scratch, push and auto-merge stay off there.
 
 ## Best workflows
 
@@ -106,7 +113,9 @@ The loop stops itself after **5 non-improving rounds** and reports instead of gr
 | Commit with high-confidence secrets (`.env`, `id_rsa`, `*.key`, `.pem` with a private key) | blocked |
 | Recursive delete outside the repo, `rm -rf .git` | blocked |
 | Protected push, deploy or publish, history rewrite, unresolved targets, shell fed from a pipe, `xargs`, git aliases | asks |
-| Anything inside the OS temp dir | allowed |
+| Anything inside the OS temp dir (and, with a trusted workspace marker, strictly inside its `scratch` dir) | allowed |
+| `wsl.exe [-d d] --exec <program> <args>` (`bash -lc` too) | scanned like the same command run directly; `--`, a bare command or an unknown option asks |
+| Writing `.h7-workspace.json` | blocked (ask the user to edit it) |
 
 Tips: run single plain commands (long `&&` chains and `node -e` ask). Ask mode is per machine (`prompt`, `allow`, `deny`) in an owner-only config under `~/.h7`; agents cannot edit it. Hard blocks never weaken. `H7_GUARD=off` is the only escape hatch; use it consciously. It is an accident floor, not a sandbox.
 
