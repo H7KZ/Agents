@@ -41,6 +41,17 @@ Without the bootstrap: `claude plugin marketplace add H7KZ/Agents` then `claude 
 | Command | What it does |
 |---|---|
 | `/h7:doctor` | Read-only check of this machine: Node, git, gh (+auth), claude, marketplace and auto-update, mattpocock skills and duplicates, `~/.h7` |
+| `/h7:setup` | Once per repo: interview the repo, write `docs/agents/verification.md`, the AGENTS.md block, and proven `verify-*` skills |
+| `/h7:verify` | Run the testing bar scoped to the change (diff coverage, mutation, edge cases, e2e); records `.h7/verify.json` |
+| `/h7:review` | Fresh-context lens reviewers (spec, standards, adversarial, security, performance, test quality, architecture); only reproduced findings survive |
+| `/h7:ship` | Commit story, PR body, CI watcher (READY / WAITING / BLOCKED); never merges unless the repo opts in |
+| `/h7:work` | Driver: research, grill, implement, verify, review, loop, ship, with a run journal in `.h7/runs` |
+| `/h7:retro` | Turn corrections into proposed checks; you approve row by row |
+| `/h7:improve` | Work the improvement queue in `~/.h7/proposals` |
+| `/h7:formal-create`, `/h7:formal-maintain` | Opt-in TLA+/statechart models and drift checks |
+
+All skills are user-invoked only (`disable-model-invocation: true`); nothing auto-triggers. Run `/h7:setup` in a repo
+before `/h7:work`. Runner minutes: CI runs 3 cells; run `npm run mutation` locally before merging.
 
 ## Always-on safety guard
 
