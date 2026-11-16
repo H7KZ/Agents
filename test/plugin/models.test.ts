@@ -86,6 +86,46 @@ describe('pickReviewer', () => {
   });
 });
 
+describe('regressions from review', () => {
+  it('reads a models.json that starts with a byte order mark', () => {
+    assert.deepEqual(parseModels('\uFEFF{"reviewer":"sonnet"}'), { reviewer: 'sonnet' });
+  });
+
+  it('treats aliases and full model ids of one family as the same model', () => {
+    for (const [reviewer, author] of [['sonnet', 'claude-sonnet-4-5'], ['claude-opus-4-1', 'opus'], ['Claude-Haiku-3', 'haiku'], ['fable', 'claude-fable-5'], ['claude-sonnet-4', 'claude-sonnet-5-5'], ['gpt-5', 'GPT-5'], ['claude-x', 'x']]) {
+      assert.equal(pickReviewer({ reviewer }, author).status, 'same-as-author', reviewer + ' vs ' + author);
+    }
+    for (const [reviewer, author] of [['sonnet', 'opus'], ['claude-haiku-3', 'claude-sonnet-4'], ['gpt-5', 'claude-opus-4']]) {
+      assert.equal(pickReviewer({ reviewer }, author).status, 'ok', reviewer + ' vs ' + author);
+    }
+  });
+
+  it('is unverified, not ok, when the author model is unknown', () => {
+    const r = pickReviewer({ reviewer: 'sonnet' });
+    assert.deepEqual([r.model, r.status, r.author], ['sonnet', 'unverified', null]);
+    assert.match(r.note, /independence is unverified/);
+    assert.equal(pickReviewer({ reviewer: 'sonnet' }, '  ').status, 'unverified');
+    assert.equal(pickReviewer({ reviewer: 'sonnet', author: 'opus' }).status, 'ok');
+  });
+
+  it('accepts --author=<model> as well as --author <model>', () => {
+    const files = { [modelsFile('/home/me')]: '{"reviewer":"sonnet"}' };
+    const run = (argv: string[]) => {
+      const out: string[] = [];
+      const err: string[] = [];
+      return { code: main(argv, (t) => out.push(t), (t) => err.push(t), env(files)), out, err };
+    };
+    assert.equal(JSON.parse(run(['reviewer', '--author=claude-sonnet-4-5']).out[0] as string).status, 'same-as-author');
+    assert.equal(JSON.parse(run(['reviewer', '--author=opus']).out[0] as string).status, 'ok');
+    for (const argv of [['reviewer', '--author='], ['reviewer', '--author=-x'], ['reviewer', '--author=a', 'b'], ['reviewer', '--authors=a']]) assert.equal(run(argv).code, 2, argv.join(' '));
+  });
+
+  it('finds PowerShell shims on Windows', () => {
+    const shim = path.win32.join('C:\bin', 'codex.ps1');
+    assert.deepEqual(findExternalReviewers('win32', 'C:\bin', (f) => f === shim), [{ name: 'codex', path: shim }]);
+  });
+});
+
 describe('findExternalReviewers', () => {
   it('finds bare names on posix PATH in order', () => {
     const found = findExternalReviewers('linux', '/x::/a:/b', (f) => ['/b/codex', '/a/codex', '/b/gemini'].includes(f));

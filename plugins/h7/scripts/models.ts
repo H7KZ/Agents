@@ -21,7 +21,7 @@ export const modelsFile = (home: string): string => path.join(home, '.h7', 'mode
 export function parseModels(text: string): Models | null {
   let raw: unknown;
   try {
-    raw = JSON.parse(text);
+    raw = JSON.parse(text.replace(/^﻿/, ''));
   } catch {
     return null;
   }
@@ -55,12 +55,20 @@ export function loadModels(home: string, read: Read = realRead): Loaded {
 export interface Reviewer {
   /** Model to pass to the reviewer subagents; null when no independent model is available. */
   model: string | null;
-  status: 'ok' | 'unconfigured' | 'same-as-author';
+  status: 'ok' | 'unverified' | 'unconfigured' | 'same-as-author';
   author: string | null;
   note: string;
 }
 
-const same = (a: string, b: string): boolean => a.trim().toLowerCase() === b.trim().toLowerCase();
+const FAMILY = /(opus|sonnet|haiku|fable)/;
+
+/** Comparable identity of a model name: its family when it names one (so `sonnet` and `claude-sonnet-4-5` agree), else the lowercase name without a `claude-` prefix. */
+const canon = (model: string): string => {
+  const lower = model.trim().toLowerCase();
+  return FAMILY.exec(lower)?.[1] ?? lower.replace(/^claude[-_ ]?/, '');
+};
+
+const same = (a: string, b: string): boolean => canon(a) === canon(b);
 
 /** Reviewer model must differ from the author model. `author` (the running session's model) wins over the configured author. */
 export function pickReviewer(models: Models, author?: string): Reviewer {
@@ -70,6 +78,9 @@ export function pickReviewer(models: Models, author?: string): Reviewer {
   }
   if (known !== null && same(models.reviewer, known)) {
     return { model: null, status: 'same-as-author', author: known, note: `reviewer model ${models.reviewer} equals the author model: pick a different one in ~/.h7/models.json` };
+  }
+  if (known === null) {
+    return { model: models.reviewer, status: 'unverified', author: null, note: 'author model unknown: pass --author <model> or set "author" in ~/.h7/models.json; independence is unverified' };
   }
   return { model: models.reviewer, status: 'ok', author: known, note: 'reviewer model differs from the author model' };
 }
@@ -83,7 +94,7 @@ export const EXTERNAL_CLIS = ['codex', 'gemini'] as const;
 
 export type Exists = (file: string) => boolean;
 
-const WIN_EXT = ['.exe', '.cmd', '.bat', '.com'];
+const WIN_EXT = ['.exe', '.cmd', '.bat', '.com', '.ps1'];
 
 /** codex and gemini found on PATH. Detection only: nothing is executed. */
 export function findExternalReviewers(platform: string, pathVar: string, exists: Exists): ExternalReviewer[] {
@@ -106,7 +117,7 @@ export interface Env {
   exists: Exists;
 }
 
-const USAGE = 'usage: models.ts show | reviewer [--author <model>] | cli';
+const USAGE = 'usage: models.ts show | reviewer [--author <model> | --author=<model>] | cli';
 
 export function main(argv: string[], out: (text: string) => void, err: (text: string) => void, env: Env): number {
   const [cmd, ...rest] = argv;
@@ -118,8 +129,9 @@ export function main(argv: string[], out: (text: string) => void, err: (text: st
     out(JSON.stringify({ reviewers: findExternalReviewers(env.platform, env.pathVar, env.exists) }));
     return 0;
   }
-  const author = rest[1];
-  if (cmd === 'reviewer' && (rest.length === 0 || (rest.length === 2 && rest[0] === '--author' && author !== undefined && !author.startsWith('-')))) {
+  const inline = rest.length === 1 ? /^--author=(.+)$/s.exec(rest[0] as string)?.[1] : undefined;
+  const author = inline ?? (rest.length === 2 && rest[0] === '--author' ? rest[1] : undefined);
+  if (cmd === 'reviewer' && (rest.length === 0 || (author !== undefined && !author.startsWith('-')))) {
     const loaded = loadModels(env.home, env.read);
     out(JSON.stringify({ ...pickReviewer(loaded.models, author), config: loaded.status }));
     return 0;
