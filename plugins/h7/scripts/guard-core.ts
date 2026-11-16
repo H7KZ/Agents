@@ -83,9 +83,12 @@ function askResult(reason: string, note: string, mode: AskMode): GuardResult {
 }
 
 const FILE_TOOLS = new Set(['Write', 'Edit', 'MultiEdit', 'NotebookEdit']);
-const CONFIG_MENTION = /\.h7["'\\/]*[\\/]["']*guard\.json/i;
+// Any mention of the config file name, or a .h7 path segment reached through another directory
+// (~/.h7, $HOME/.h7, $X/.h7, C:\Users\me\.h7). A repo-relative ".h7/..." or "./.h7/..." is not matched.
+const CONFIG_MENTION = /guard["']*\.["']*json|[^\s"'=:.\\/][\\/]+["']*\.h7(?![\w.-])/i;
+const CONFIG_NAME = /guard\.json$/i;
 const CONFIG_REASON =
-  'h7 guard ask-mode config (~/.h7/guard.json) is owner-only: agents must not change their own guard policy. Ask the user to edit it.';
+  'h7 guard state in ~/.h7 (ask-mode config, guard log) is owner-only: agents must not change their own guard policy. Ask the user to edit it.';
 
 function configBlock(note = ''): GuardResult {
   return { code: 2, stdout: '', stderr: `h7 guard blocked [guard-config]: ${CONFIG_REASON}${note}
@@ -122,9 +125,10 @@ export function run(stdinText: string, env: Record<string, string | undefined>, 
     if (typeof input.tool_name === 'string' && FILE_TOOLS.has(input.tool_name)) {
       const target = input.tool_input?.file_path ?? input.tool_input?.notebook_path;
       if (typeof target !== 'string') return ALLOW;
-      const config = join(home, '.h7', 'guard.json');
-      const norm = (p: string) => (io.platform === 'win32' ? p.replaceAll('\\', '/').toLowerCase() : p);
-      if (norm(target) !== norm(config) && !CONFIG_MENTION.test(target)) return ALLOW;
+      const paths = makePaths(io.platform === 'win32' ? 'win32' : 'posix', io.realpath);
+      const base = typeof input.cwd === 'string' && input.cwd !== '' ? input.cwd : io.fallbackCwd;
+      const dir = paths.resolve(paths.resolve(base, home), '.h7');
+      if (!paths.isInside(dir, paths.resolve(base, target)) && !CONFIG_NAME.test(target)) return ALLOW;
       const logError = appendLog(home, entry('block', 'guard-config', target, cwd));
       return configBlock(logError === null ? '' : ` (could not write guard log: ${logError})`);
     }

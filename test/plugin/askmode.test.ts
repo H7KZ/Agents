@@ -157,8 +157,31 @@ describe('guard config is owner-only', () => {
   it('allows file tools on other paths and with no path', () => {
     const home = tmpDir();
     assert.deepEqual(fileTool('Write', { file_path: '/repo/src/a.ts' }, home), { code: 0, stdout: '', stderr: '' });
-    assert.deepEqual(fileTool('Write', { file_path: `${home}/.h7/other.json` }, home), { code: 0, stdout: '', stderr: '' });
+    assert.deepEqual(fileTool('Write', { file_path: '/repo/.h7/runs/2026-01-01-x.md' }, home), { code: 0, stdout: '', stderr: '' });
     assert.deepEqual(fileTool('Edit', {}, home), { code: 0, stdout: '', stderr: '' });
+  });
+
+  it('protects the whole ~/.h7 directory for file tools, including relative and dotted paths', () => {
+    const home = tmpDir();
+    const deps = { ...baseDeps(home), platform: process.platform };
+    const at = (input: Record<string, unknown>, cwd?: string) =>
+      run(JSON.stringify({ tool_name: 'Write', tool_input: input, ...(cwd === undefined ? {} : { cwd }) }), { H7_HOME: home }, deps).code;
+    assert.equal(at({ file_path: join(home, '.h7', 'other.json') }), 2);
+    assert.equal(at({ file_path: join(home, 'x', '..', '.h7', 'guard.log') }), 2);
+    assert.equal(at({ file_path: join('.h7', 'policy') }, home), 2);
+    assert.equal(at({ file_path: 'a.txt' }), 0);
+    assert.equal(at({ file_path: join(home, '.h7x', 'a') }), 0);
+    assert.equal(at({ file_path: join(home, 'srv', 'guard.json') }), 2);
+  });
+
+  it('blocks shell commands that reach a .h7 directory through another path, allows repo-relative ones', () => {
+    const home = tmpDir();
+    for (const command of ['cd ~/.h7 && echo x > g', 'H=~; cp a $H/.h7', 'Set-Location C:\\Users\\me\\.h7', "cat ~/'.h7'/log"]) {
+      assert.equal(guard(command, { H7_HOME: home, H7_GUARD_ASK: 'allow' }).code, 2, command);
+    }
+    for (const command of ['echo .h7/ >> .git/info/exclude', 'ls .h7/runs', 'cat ./.h7/runs/a.md', 'npm run h7-build', 'ls x/.h7x']) {
+      assert.deepEqual(guard(command, { H7_HOME: home }), { code: 0, stdout: '', stderr: '' }, command);
+    }
   });
 
   it('notes a failed log write on config blocks', () => {
