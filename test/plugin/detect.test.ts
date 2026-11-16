@@ -395,7 +395,7 @@ describe('git detection', () => {
     assert.equal(redactUrl('https://github.com/a/b'), 'https://github.com/a/b');
     assert.equal(redactUrl('https://u:p@@@host/x y'), 'https://host/x%20y');
     assert.equal(redactUrl('https://bad host:p@ss@h/x'), 'https://h/x');
-    fc.assert(fc.property(fc.stringMatching(/^[a-z0-9]{1,8}$/), fc.stringMatching(/^[a-z0-9@:]{0,8}$/), (user, pass) => !redactUrl(`https://${user}:${pass}@h.com/x`).includes(user + ':')));
+    fc.assert(fc.property(fc.stringMatching(/^[a-z0-9]{1,8}$/), fc.stringMatching(/^[a-z0-9@:]{0,8}$/), (user, pass) => redactUrl(`https://${user}:${pass}@h.com/x`) === 'https://h.com/x'));
   });
 });
 
