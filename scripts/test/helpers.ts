@@ -32,6 +32,14 @@ export interface RunResult {
   stderr: string;
 }
 
+/** Node 22.18 prints an ExperimentalWarning for type stripping; drop only those lines so stderr assertions stay strict. */
+export function stripNodeWarnings(stderr: string): string {
+  return stderr
+    .split('\n')
+    .filter((line) => !(/^\(node:\d+\) \w*Warning: /.test(line) && line.includes('ExperimentalWarning')) && !/^\(Use `node --trace-warnings/.test(line))
+    .join('\n');
+}
+
 export function runNode(script: string, args: string[], options: { input?: string; env?: Record<string, string | undefined>; cwd?: string } = {}): RunResult {
   const result = spawnSync(process.execPath, [script, ...args], {
     input: options.input ?? '',
@@ -40,7 +48,7 @@ export function runNode(script: string, args: string[], options: { input?: strin
     encoding: 'utf8',
     windowsHide: true,
   });
-  return { status: result.status, stdout: result.stdout, stderr: result.stderr };
+  return { status: result.status, stdout: result.stdout, stderr: stripNodeWarnings(result.stderr) };
 }
 
 export function git(cwd: string, ...args: string[]): string {
