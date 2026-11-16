@@ -108,13 +108,22 @@ const CONFIG_MENTION = /guard["']*\.["']*json|[^\s"'=:.\\/][\\/]+["']*\.h7(?![\w
 // The config name anywhere in the target, plus Windows path forms the containment check cannot
 // canonicalise (\\?\, \\.\, UNC shares, NTFS streams after the drive letter): fail closed on those.
 const CONFIG_NAME = /guard\.json|^[\\/]{2}|^.{2,}:/i;
-const RUNS_PATH = /[\/].h7[\/]runs[\/]/;
+const RUNS_PATH = /[\\/]\.h7[\\/]runs(?:[\\/]|$)/i;
+const RUNS_MENTION = /\.h7[\\/]+["']?runs(?![\w.-])/i;
+// Anything that can change a file; a mere read (ls, cat, Get-Content) of the journal stays allowed.
+const WRITE_WORDS = />|\b(?:tee|rm|rmdir|mv|cp|ln|sed|awk|perl|python3?|node|truncate|dd|install|del|erase|ren|rename|touch|chmod|set-content|add-content|out-file|clear-content|remove-item|move-item|copy-item|new-item|rename-item|sc|ac|ri|mi|ci|ni)\b/i;
 const CONFIG_REASON =
   'h7 guard state in ~/.h7 (ask-mode config, guard log) is owner-only: agents must not change their own guard policy. Ask the user to edit it.';
 
 function configBlock(note = ''): GuardResult {
   return { code: 2, stdout: '', stderr: `h7 guard blocked [guard-config]: ${CONFIG_REASON}${note}
 ` };
+}
+
+/** The journal of an unattended run is what keeps the guard strict: only run-journal.ts writes it. */
+function journalBlock(logError: string | null): GuardResult {
+  const note = logError === null ? '' : ` (could not write guard log: ${logError})`;
+  return { code: 2, stdout: '', stderr: `h7 guard blocked [unattended-journal]: the run journal of an unattended run is written only by run-journal.ts${note}\n` };
 }
 
 function respond(decision: Decision, logError: string | null, mode: AskMode, unattended: () => boolean): GuardResult {
@@ -131,17 +140,22 @@ function respond(decision: Decision, logError: string | null, mode: AskMode, una
 const DIRTY_RULE = 'destructive-git-dirty';
 
 /**
- * A recovery snapshot when every block in the scan is a dirty-tree destructive git command whose loss a snapshot can hold. Null (keep the
- * block) when anything else blocks, ignored files are at stake, the repository cannot be resolved, or any snapshot step fails.
+ * Recovery snapshots when every block in the scan is a dirty-tree destructive git command whose loss a snapshot can hold: one per distinct
+ * target repository (each call carries the directory it acts in, -C and cd included). Null (keep the block) when anything else blocks, ignored
+ * files are at stake, any target is unknown or not a repository, or any snapshot step fails.
  */
-function snapshotFor(found: Decision[], command: string, cwd: string, ctx: Ctx, io: Deps): { ref: string } | null {
+function snapshotsFor(found: Decision[], command: string, ctx: Ctx, io: Deps): string[] | null {
   const blocks = found.filter((d) => d.decision === 'block');
   if (blocks.length === 0 || blocks.some((d) => d.rule !== DIRTY_RULE || d.reason.includes(IGNORED_LOSS))) return null;
-  const root = ctx.git.repoRoot(cwd);
-  /* node:coverage ignore next */
-  if (root === null) return null; // the dirty rule only fires inside a repository
-  const result = takeSnapshot(root, command, { runner: io.snapshotRunner ?? io.runner, now: io.now });
-  return result.ok ? { ref: result.ref } : null;
+  const roots = blocks.map((d) => (d.dir === undefined ? null : ctx.git.repoRoot(d.dir)));
+  if (roots.some((root) => root === null)) return null;
+  const refs: string[] = [];
+  for (const root of new Set(roots as string[])) {
+    const result = takeSnapshot(root, command, { runner: io.snapshotRunner ?? io.runner, now: io.now });
+    if (!result.ok) return null;
+    refs.push(result.ref);
+  }
+  return refs;
 }
 
 export function run(stdinText: string, env: Record<string, string | undefined>, io: Deps): GuardResult {
@@ -175,9 +189,7 @@ export function run(stdinText: string, env: Record<string, string | undefined>, 
       const resolved = paths.resolve(base, target);
       if (!paths.isInside(dir, resolved) && !CONFIG_NAME.test(target)) {
         if (!RUNS_PATH.test(resolved) || !isUnattended(env, base, probe)) return ALLOW;
-        const logError = appendLog(home, entry('block', 'unattended-journal', target, base));
-        return { code: 2, stdout: '', stderr: `h7 guard blocked [unattended-journal]: the run journal of an unattended run is written only by run-journal.ts${logError === null ? '' : ` (could not write guard log: ${logError})`}
-` };
+        return journalBlock(appendLog(home, entry('block', 'unattended-journal', target, base)));
       }
       const logError = appendLog(home, entry('block', 'guard-config', target, cwd));
       return configBlock(logError === null ? '' : ` (could not write guard log: ${logError})`);
@@ -192,6 +204,7 @@ export function run(stdinText: string, env: Record<string, string | undefined>, 
       return configBlock(logError === null ? '' : ` (could not write guard log: ${logError})`);
     }
     cwd = typeof input.cwd === 'string' && input.cwd !== '' ? input.cwd : io.fallbackCwd;
+    if (RUNS_MENTION.test(text) && WRITE_WORDS.test(text) && unattended()) return journalBlock(appendLog(home, entry('block', 'unattended-journal', text, cwd)));
     const platform = io.platform === 'win32' ? 'win32' : 'posix';
     const paths = makePaths(platform, io.realpath);
     const disk = io.disk ?? realDisk;
@@ -201,13 +214,13 @@ export function run(stdinText: string, env: Record<string, string | undefined>, 
     const dirs = candidates.filter((dir) => !paths.isInside(dir, cwd) && !paths.isInside(dir, paths.resolve(cwd, home)));
     const ctx: Ctx = { cwd, home, paths, git: createGit(io.runner, disk), disk, taint: { home: false }, tmp: { dirs } };
     const found = scan(command, input.tool_name === 'PowerShell' ? 'ps' : 'sh', ctx, newState(cwd));
-    const snapshot = snapshotFor(found, command, cwd, ctx, io);
+    const snapshot = snapshotsFor(found, command, ctx, io);
     // The dirty-tree block is dropped when it was snapshotted, and when a stronger unrelated block names the real reason.
     const otherBlock = found.some((d) => d.decision === 'block' && d.rule !== DIRTY_RULE);
     const decision = pickDecision(snapshot === null && !otherBlock ? found : found.filter((d) => d.rule !== DIRTY_RULE));
     if (snapshot !== null) {
-      const logError = appendLog(home, { ...entry('allow', 'destructive-git-snapshot', command, cwd), ref: snapshot.ref });
-      const note = `h7 guard: saved a recovery snapshot as ${snapshot.ref} before this destructive git command; undo with: git restore --source=${snapshot.ref} --worktree -- .${logError === null ? '' : ` (could not write guard log: ${logError})`}`;
+      const logError = appendLog(home, { ...entry('allow', 'destructive-git-snapshot', command, cwd), ref: snapshot.join(',') });
+      const note = `h7 guard: saved a recovery snapshot as ${snapshot.join(', ')} before this destructive git command; undo with: ${snapshot.map((ref) => `git restore --source=${ref} --worktree -- .`).join('; ')}${logError === null ? '' : ` (could not write guard log: ${logError})`}`;
       if (decision === null) return { ...ALLOW, stderr: `${note}
 ` };
       const rest = respond(decision, appendLog(home, entry(decision.decision, decision.rule, command, cwd)), mode, unattended);

@@ -321,12 +321,17 @@ function lostWork(call: GitCall, parsed: ParsedArgs, ctx: Ctx): Loss | null {
   }
 }
 
+/** Earlier commands in the chain only vouch for the repository they ran in. */
+function knownHere(call: GitCall, ctx: Ctx): boolean {
+  return call.state.cleanRoot === ctx.git.repoRoot(call.cwd);
+}
+
 function hasTrackedChanges(call: GitCall, ctx: Ctx): boolean {
-  return call.state.trackedClean === undefined ? ctx.git.trackedDirty(call.cwd) : !call.state.trackedClean;
+  return call.state.trackedClean === undefined || !knownHere(call, ctx) ? ctx.git.trackedDirty(call.cwd) : !call.state.trackedClean;
 }
 
 function hasUntracked(call: GitCall, ctx: Ctx, ignored: boolean): boolean {
-  if (call.state.untrackedClean !== undefined) return !call.state.untrackedClean;
+  if (call.state.untrackedClean !== undefined && knownHere(call, ctx)) return !call.state.untrackedClean;
   return ctx.git.untrackedFiles(call.cwd).length > 0 || (ignored && ctx.git.ignoredFiles(call.cwd).length > 0);
 }
 
@@ -339,10 +344,16 @@ function destructive(call: GitCall, ctx: Ctx): Decision | null {
   const dirty = loss.scope === 'tracked' ? hasTrackedChanges(call, ctx) : hasUntracked(call, ctx, loss.scope === 'ignored');
   if (!dirty) return null;
   const files = loss.scope === 'tracked' ? 'uncommitted changes' : 'untracked files';
-  return block(
+  // A directory the guard could not follow (a cd it failed to resolve, GIT_DIR or GIT_WORK_TREE set in the command) is not a target to snapshot: the block stays.
+  const redirected = 'GIT_DIR' in call.env || 'GIT_WORK_TREE' in call.env;
+  const dir = call.state.cwdUnknown === true || redirected ? undefined : call.cwd;
+  return {
+    ...block(
     'destructive-git-dirty',
     `${loss.what} would destroy ${files}${loss.scope === 'ignored' ? IGNORED_LOSS : ''}. Commit them or run "git stash push -u" first; the command is allowed once the worktree is clean.`,
-  );
+  ),
+    dir,
+  };
 }
 
 function isProtectedName(name: string): boolean {
@@ -546,6 +557,7 @@ function branchAfter(call: GitCall, ctx: Ctx): string | null | undefined {
 /** Records what a git command changes so later commands in the same chain see it. */
 export function applyGitEffects(call: GitCall, ctx: Ctx): void {
   const { state } = call;
+  const before = [state.trackedClean, state.untrackedClean];
   const parsed = parseArgs(call.args, call.sub === 'commit' ? COMMIT_SPEC : DESTRUCTIVE_SPECS.get(call.sub));
   const flags = parsed.flags;
   for (const { name, value } of aliasDefinitions(call)) state.aliases[name] = value;
@@ -594,4 +606,5 @@ export function applyGitEffects(call: GitCall, ctx: Ctx): void {
     default:
       break;
   }
+  if (state.trackedClean !== before[0] || state.untrackedClean !== before[1]) state.cleanRoot = ctx.git.repoRoot(call.cwd);
 }

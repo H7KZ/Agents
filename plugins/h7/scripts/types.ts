@@ -6,6 +6,8 @@ export interface Decision {
   decision: 'block' | 'ask';
   rule: string;
   reason: string;
+  /** The directory the command acts in, resolved per call (-C and cd included); absent when it cannot be trusted. */
+  dir?: string;
 }
 
 export interface TempInfo {
@@ -37,6 +39,8 @@ export interface ScanState {
   /** Set once an earlier command in the chain stashed, reset or committed tracked changes away. */
   trackedClean?: boolean;
   untrackedClean?: boolean;
+  /** The repository root the two flags above were learned in; another repository in the same chain is asked about again. */
+  cleanRoot?: string | null;
   /** Paths added to the index earlier in the chain. */
   staged: string[];
   /** Git aliases defined earlier in the chain. */

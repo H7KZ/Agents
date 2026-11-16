@@ -16,7 +16,7 @@ const ok = (stdout = ''): RunResult => ({ status: 0, stdout });
 const fail: RunResult = { status: 1, stdout: '' };
 
 interface Script {
-  calls: { args: string[]; env?: Record<string, string> }[];
+  calls: { args: string[]; env?: Record<string, string>; cwd?: string }[];
   refs?: string[];
   failOn?: string;
   throwOn?: string;
@@ -27,8 +27,8 @@ const subcommand = (args: string[]): string => (args[0] === '-c' ? (args[2] as s
 
 /** A scripted git: answers the snapshot steps, fails or throws on the named subcommand. */
 function scripted(script: Script): Runner {
-  return (args, _cwd, env) => {
-    script.calls.push({ args, env });
+  return (args, cwd, env) => {
+    script.calls.push({ args, env, cwd });
     const key = subcommand(args);
     if (script.throwOn === key) throw new Error('git timed out');
     if (script.failOn === key) return fail;
@@ -59,7 +59,7 @@ describe('takeSnapshot', () => {
     const result = take(script, removed);
     const ref = `${BACKUP_PREFIX}20260203T040506Z-001`;
     assert.deepEqual(result, { ok: true, ref });
-    assert.deepEqual(script.calls.map((c) => subcommand(c.args)), ['rev-parse', 'rev-parse', 'read-tree', 'add', 'write-tree', 'commit-tree', 'for-each-ref', 'update-ref']);
+    assert.deepEqual(script.calls.map((c) => subcommand(c.args)), ['rev-parse', 'rev-parse', 'read-tree', 'add', 'write-tree', 'commit-tree', 'for-each-ref', 'update-ref', 'rev-parse']);
     const index = `/repo/.git/h7-snapshot-42-${NOW.getTime()}.idx`;
     for (const call of script.calls.filter((c) => ['read-tree', 'add', 'write-tree', 'commit-tree'].includes(subcommand(c.args)))) {
       assert.equal(fwd(call.env?.GIT_INDEX_FILE), index);
@@ -68,7 +68,7 @@ describe('takeSnapshot', () => {
     const commit = script.calls.find((c) => subcommand(c.args) === 'commit-tree')?.args as string[];
     assert.deepEqual(commit.slice(0, 3), ['-c', 'commit.gpgsign=false', 'commit-tree']);
     assert.ok(commit.includes('-p') && commit.includes('HEAD'));
-    assert.deepEqual(script.calls.at(-1)?.args, ['update-ref', ref, 'commit1', ''], 'empty old value: the ref must not exist yet');
+    assert.deepEqual(script.calls.find((c) => c.args[0] === 'update-ref')?.args, ['update-ref', ref, 'commit1', ''], 'empty old value: the ref must not exist yet');
     assert.deepEqual(removed.map((p) => fwd(p)), [index]);
   });
 
@@ -91,6 +91,28 @@ describe('takeSnapshot', () => {
     assert.deepEqual(deleted, many.slice(0, 3));
     const flaky: Runner = (args, cwd, env) => (args[1] === '-d' ? fail : scripted({ calls: [], refs: many })(args, cwd, env));
     assert.equal(takeSnapshot('/repo', 'x', { runner: flaky, now: () => NOW, remove: () => {} }).ok, true);
+  });
+
+  it('prunes only well-formed names, never the new ref, and keeps the newest KEEP including it', () => {
+    const odd = [`${BACKUP_PREFIX}evil`, `${BACKUP_PREFIX}20250101T000000Z-1`, 'refs/heads/main', `${BACKUP_PREFIX}20250101T000000Z-001/extra`];
+    const newer = Array.from({ length: KEEP + 4 }, (_, i) => `${BACKUP_PREFIX}2030010${i % 10}T0000${String(i).padStart(2, '0')}Z-001`);
+    const script: Script = { calls: [], refs: [...odd, ...newer] };
+    const result = take(script) as { ok: true; ref: string };
+    assert.equal(result.ok, true);
+    const deleted = script.calls.filter((c) => c.args[1] === '-d').map((c) => c.args[2] as string);
+    assert.ok(!deleted.includes(result.ref), 'the ref just created is the oldest by stamp and still survives');
+    assert.ok(deleted.every((name) => !odd.includes(name)), 'names outside the format are never touched');
+    assert.deepEqual(deleted, [...newer].sort().slice(0, newer.length - KEEP));
+  });
+
+  it('verifies the new ref resolves after pruning, and fails closed when it does not', () => {
+    const asked: string[][] = [];
+    const verifying: Runner = (args, cwd, env) => {
+      asked.push(args);
+      return args[0] === 'rev-parse' && args.some((a) => a.startsWith(BACKUP_PREFIX)) ? fail : scripted({ calls: [] })(args, cwd, env);
+    };
+    assert.deepEqual(takeSnapshot('/repo', 'x', { runner: verifying, now: () => NOW, remove: () => {} }), { ok: false, reason: 'the new backup ref does not resolve' });
+    assert.equal(asked.at(-1)?.at(-1), `${BACKUP_PREFIX}20260203T040506Z-001^{commit}`);
   });
 
   it('fails closed at every step, still removing the temporary index', () => {
@@ -209,6 +231,51 @@ describe('guard: destructive git on a dirty tree', () => {
     assert.equal(result.code, 2);
     assert.match(result.stderr, /ignored files/);
     assert.ok(!script.calls.some((c) => c.args[0] === 'update-ref'));
+  });
+
+  /** Two repositories, /repo and /other; git answers per directory it is run in. */
+  const twoDisk = { kind: (p: string) => (/\/(repo|other)\/\.git$/.test(p.split(String.fromCharCode(92)).join('/')) ? ('dir' as const) : null), read: () => null };
+  const perDir = (script: Script, failIn?: string): Runner => (args, cwd, env) => {
+    if (args[0] === 'rev-parse' && args[1] === '--show-toplevel') return ok(`${cwd}\n`);
+    if (cwd === failIn && args[0] === 'write-tree') return fail;
+    return guardRunner(script, dirty)(args, cwd, env);
+  };
+  const callIn = (command: string, runner: Runner) => call(command, runner, { H7_HOME: home }, { disk: twoDisk });
+  const snapshotDirs = (script: Script): string[] => script.calls.filter((c) => c.args[0] === 'update-ref' && c.args[1] !== '-d').map((c) => c.cwd as string);
+
+  it('snapshots the repository the command targets, not the hook cwd (-C and cd)', () => {
+    for (const command of ['git -C /other reset --hard', 'cd /other && git reset --hard']) {
+      const script: Script = { calls: [] };
+      const result = callIn(command, perDir(script));
+      assert.equal(result.code, 0, command);
+      assert.deepEqual(snapshotDirs(script), ['/other'], command);
+    }
+  });
+
+  it('snapshots each distinct target repository once', () => {
+    const script: Script = { calls: [] };
+    const result = callIn('git reset --hard && git -C /other reset --hard && git -C /repo clean -fd', perDir(script));
+    assert.equal(result.code, 0);
+    assert.deepEqual(snapshotDirs(script).sort(), ['/other', '/repo']);
+    assert.equal((result.stderr.match(/refs\/h7\/backup\//g) ?? []).length, 4, 'both refs named in the note and in each restore hint');
+  });
+
+  it('keeps the block when any one target fails to snapshot', () => {
+    const result = callIn('git reset --hard && git -C /other reset --hard', perDir({ calls: [] }, '/other'));
+    assert.equal(result.code, 2);
+    assert.match(result.stderr, /destructive-git-dirty/);
+  });
+
+  it('keeps the block for a target the guard could not resolve (cd to an unknown place, --git-dir)', () => {
+    const script: Script = { calls: [] };
+    assert.equal(callIn('cd "$SOMEWHERE" && git reset --hard', perDir(script)).code, 2);
+    assert.match(callIn('git --git-dir=/other/data reset --hard', perDir(script)).stdout, /destructive-git-unresolved/);
+    assert.equal(callIn('GIT_DIR=/other/.git git reset --hard', perDir(script)).code, 2);
+    assert.equal(callIn('GIT_WORK_TREE=/other git reset --hard', perDir(script)).code, 2);
+    assert.ok(!script.calls.some((c) => c.args[0] === 'update-ref'));
+    const viaGitDir: Script = { calls: [] };
+    assert.equal(callIn('git --git-dir=/other/.git reset --hard', perDir(viaGitDir)).code, 0);
+    assert.deepEqual(snapshotDirs(viaGitDir), ['/other']);
   });
 
   it('keeps every other block: skipping hooks in the same chain is still blocked and nothing is snapshotted', () => {

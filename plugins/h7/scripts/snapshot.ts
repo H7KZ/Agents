@@ -6,6 +6,8 @@ import type { Runner } from './git.ts';
 export const BACKUP_PREFIX = 'refs/h7/backup/';
 /** Backup refs kept; older ones are pruned after each snapshot. */
 export const KEEP = 20;
+/** Only names in the format this module writes are ever counted or pruned. */
+export const BACKUP_NAME = /^refs\/h7\/backup\/\d{8}T\d{6}Z-\d{3}$/;
 
 export interface SnapshotDeps {
   /** A git runner with room for `git add -A` on a big tree; takes an extra environment. */
@@ -69,13 +71,16 @@ export function takeSnapshot(root: string, command: string, deps: SnapshotDeps):
       if (commit === null || commit === '') return { ok: false, reason: 'git commit-tree failed' };
       const listed = runner(['for-each-ref', '--format=%(refname)', BACKUP_PREFIX], root);
       if (listed.status !== 0) return { ok: false, reason: 'cannot list existing backup refs' };
-      const existing = listed.stdout.split('\n').filter((name) => name !== '').sort();
+      const existing = listed.stdout.split('\n').filter((name) => BACKUP_NAME.test(name)).sort();
       const base = `${BACKUP_PREFIX}${stamp(time)}-`;
       const n = String(existing.filter((name) => name.startsWith(base)).length + 1).padStart(3, '0');
       const ref = `${base}${n}`;
       // The empty old value means "must not exist": a racing snapshot cannot be overwritten.
       if (runner(['update-ref', ref, commit, ''], root).status !== 0) return { ok: false, reason: 'git update-ref failed' };
-      for (const old of [...existing, ref].sort().slice(0, -KEEP)) runner(['update-ref', '-d', old], root);
+      // Prune oldest first by stamp, keeping the newest KEEP including this one, and never the ref just created.
+      for (const old of [...existing, ref].sort().slice(0, -KEEP)) if (old !== ref) runner(['update-ref', '-d', old], root);
+      // A snapshot that does not resolve is no snapshot: the caller keeps its block.
+      if (runner(['rev-parse', '--verify', '-q', ref + '^{commit}'], root).status !== 0) return { ok: false, reason: 'the new backup ref does not resolve' };
       return { ok: true, ref };
     } catch (error) {
       return { ok: false, reason: (error as Error).message };
