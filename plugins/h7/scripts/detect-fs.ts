@@ -38,7 +38,7 @@ export function openRepo(root: string, limits: Limits = DEFAULT_LIMITS, readDir:
     } catch {
       return;
     }
-    entries.sort((a, b) => (a.name < b.name ? -1 : 1));
+    entries.sort((a, b) => Number(a.name > b.name) - Number(a.name < b.name));
     for (const entry of entries) {
       const path = rel === '' ? entry.name : `${rel}/${entry.name}`;
       if (!entry.isDirectory()) {
