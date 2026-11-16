@@ -158,6 +158,34 @@ export function parseGitCall(argv: string[], cwd: string, env: Record<string, st
   return { sub, args, cwd: globals.at, configs: globals.configs, envConfigs: globals.envConfigs, env, state, unresolvedRepo: globals.unresolved, shell };
 }
 
+const CONFIG_SPEC: ParseSpec = { valueShort: 'f', valueLong: ['--file', '--type', '--blob', '--default', '--comment', '--value'] };
+const CONFIG_READ_ONLY = ['--unset', '--unset-all', '--get', '--get-all', '--get-regexp', '--get-urlmatch', '--list', '-l', '--remove-section', '--rename-section', '--edit', '-e'];
+/** The keys the guard cares about: hook location and aliases. */
+const CONFIG_KEY = /^(?:core\.hookspath|alias\..+)$/i;
+
+interface ConfigWrite {
+  key: string;
+  value: string | undefined;
+}
+
+/**
+ * Keys written by `git config`. Every positional is a candidate key (subcommand words such as set/get/add and values of
+ * options like -f or --type are skipped by the parser), and the positional after a key is its value. `ambiguous` means a
+ * key-looking word was swallowed as an option value, so the guard cannot tell what is being set.
+ */
+function configWrites(call: GitCall): { writes: ConfigWrite[]; ambiguous: boolean } {
+  if (call.sub !== 'config') return { writes: [], ambiguous: false };
+  const parsed = parseArgs(call.args, CONFIG_SPEC);
+  const positionals = [...parsed.positionals, ...parsed.rest];
+  const ambiguous = call.args.some((arg) => !arg.startsWith('-') && CONFIG_KEY.test(arg) && !positionals.includes(arg));
+  if (parsed.flags.some((flag) => CONFIG_READ_ONLY.includes(flag))) return { writes: [], ambiguous };
+  const writes: ConfigWrite[] = [];
+  positionals.forEach((word, i) => {
+    if (CONFIG_KEY.test(word)) writes.push({ key: word, value: positionals[i + 1] });
+  });
+  return { writes, ambiguous };
+}
+
 /** Alias bodies defined by this call (`-c alias.x=...` or `git config alias.x ...`). */
 export function aliasDefinitions(call: GitCall): { name: string; value: string }[] {
   const out: { name: string; value: string }[] = [];
@@ -165,9 +193,8 @@ export function aliasDefinitions(call: GitCall): { name: string; value: string }
     const match = /^alias\.([^=]+)=([\s\S]*)$/i.exec(config);
     if (match) out.push({ name: (match[1] as string).toLowerCase(), value: match[2] as string });
   }
-  if (call.sub === 'config') {
-    const [key, value] = parseArgs(call.args).positionals;
-    const match = /^alias\.(.+)$/i.exec(key ?? '');
+  for (const { key, value } of configWrites(call).writes) {
+    const match = /^alias\.(.+)$/i.exec(key);
     if (match && value !== undefined) out.push({ name: (match[1] as string).toLowerCase(), value });
   }
   return out;
@@ -204,9 +231,8 @@ function hooksPathValues(call: GitCall): (string | undefined)[] {
     const match = /^core\.hookspath=([\s\S]*)$/i.exec(config);
     if (match) values.push(call.env[match[1] as string]);
   }
-  if (call.sub === 'config') {
-    const [key, value] = parseArgs(call.args).positionals;
-    if (key?.toLowerCase() === 'core.hookspath' && value !== undefined) values.push(value);
+  for (const { key, value } of configWrites(call).writes) {
+    if (key.toLowerCase() === 'core.hookspath' && value !== undefined) values.push(value);
   }
   const count = Number.parseInt(call.env.GIT_CONFIG_COUNT ?? '', 10);
   for (let n = 0; n < (Number.isInteger(count) ? Math.min(count, 64) : 0); n++) {
@@ -217,6 +243,9 @@ function hooksPathValues(call: GitCall): (string | undefined)[] {
 
 function hooksPath(call: GitCall, ctx: Ctx): Decision | null {
   let pending: Decision | null = null;
+  if (configWrites(call).ambiguous) {
+    pending = ask('skip-git-hooks', `git config names core.hooksPath or an alias in a position the guard cannot place, so it cannot tell what is being set. ${HOOKS_ADVICE}`);
+  }
   for (const value of hooksPathValues(call)) {
     const expanded = value === undefined || value === '' ? null : expandIn(ctx, value);
     if (expanded === null) {
