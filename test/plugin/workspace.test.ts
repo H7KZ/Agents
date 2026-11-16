@@ -1,4 +1,5 @@
 import assert from 'node:assert/strict';
+import { spawnSync } from 'node:child_process';
 import { mkdirSync, openSync, readFileSync, statSync, symlinkSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { describe, it } from 'node:test';
@@ -329,6 +330,12 @@ describe('workspace resolution', () => {
     assert.equal(canonicalPath(realFsIo, join(ws, 'a', 'b')), join(ws, 'a', 'b'));
     const never: FsIo = { ...realFsIo, realpath: () => { throw new Error('ENOENT'); } };
     assert.equal(canonicalPath(never, join(ws, 'a')), join(ws, 'a'));
+  });
+
+  it('the real realpath expands Windows 8.3 short names, so a runner temp dir matches the long path git reports', { skip: process.platform !== 'win32' }, () => {
+    const dir = tmpDir('h7-long-name-');
+    const short = spawnSync('cmd', ['/c', 'for', '%I', 'in', `("${dir}")`, 'do', '@echo', '%~sI'], { encoding: 'utf8' }).stdout.trim();
+    assert.equal(realFsIo.realpath(short || dir), dir);
   });
 
   it('defaultHome honors H7_HOME', () => {

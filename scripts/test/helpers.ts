@@ -62,6 +62,8 @@ export function initRepo(dir: string): string {
   git(dir, 'config', 'user.email', 'test@example.com');
   git(dir, 'config', 'user.name', 'Test');
   git(dir, 'config', 'commit.gpgsign', 'false');
+  git(dir, 'config', 'core.autocrlf', 'false');
+  git(dir, 'config', 'core.eol', 'lf');
   writeFileSync(join(dir, 'README.md'), '# fixture\n');
   git(dir, 'add', 'README.md');
   git(dir, 'commit', '-q', '-m', 'init');

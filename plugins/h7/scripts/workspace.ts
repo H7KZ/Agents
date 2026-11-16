@@ -159,7 +159,7 @@ export const realFsIo: FsIo = {
       return null;
     }
   },
-  realpath: (file) => realpathSync(file),
+  realpath: (file) => realpathSync.native(file),
   read: (file) => readFileSync(file, 'utf8'),
   readdir: (dir) => readdirSync(dir),
 };
