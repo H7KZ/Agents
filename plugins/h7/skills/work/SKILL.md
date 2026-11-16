@@ -24,7 +24,7 @@ The Stop gate in the frontmatter blocks stopping while `.h7/verify.json` has a `
 4. Never push, merge or open a pull request unless `/h7:ship` rules allow it (the user asked for this run, or `docs/agents/verification.md` records the ship mode). Shipping is step 6 and follows `/h7:ship` literally.
 5. The journal is local state: `.h7/` is git-excluded and never committed, never staged, never quoted into a commit message, PR body or comment beyond what a phase skill asks for. Put no secrets in it; the script redacts, but do not rely on it.
 6. Never read `.env` files. Commits follow the repo convention, else Conventional Commits, with the attribution trailer the session instructs, `git add <explicit paths>` only. The safety guard applies to every call; when it asks, ask the user.
-7. Stop after 5 consecutive non-improving rounds (step 5) and report. Do not start a sixth.
+7. Stop after 5 consecutive non-improving rounds (step 5, counted by `run-journal.ts progress`, not by you) and report. Do not start a sixth.
 
 ## 0. Start or resume
 
@@ -36,25 +36,25 @@ node "${CLAUDE_PLUGIN_ROOT}/scripts/run-journal.ts" start --task "<one line task
 node "${CLAUDE_PLUGIN_ROOT}/scripts/run-journal.ts" show
 ```
 
-`start` creates `.h7/runs/<id>/journal.jsonl` and adds `.h7/` to `.git/info/exclude` (`excluded: false` means it could not, for example in a worktree: run `/h7:setup` or add `.h7/` by hand before any commit). `show` gives event counts per phase and the last events: continue from the phase the last event shows. Every later call uses the newest run unless you pass `--run <id>`.
+`start` first adds `.h7/` to the repository's `info/exclude` (the path comes from `git rev-parse --git-path info/exclude`, so a linked worktree works) and writes nothing at all when it cannot, then creates `.h7/runs/<id>/journal.jsonl` and records the id in `.h7/runs/CURRENT`. Keep the `id` it prints and pass `--run <id>` on every later call: `CURRENT` is shared by every session in the repo, a second `start` replaces it, and with no `--run` and no `CURRENT` the script refuses to pick between several runs. `show` (with no `--run`, it reads CURRENT; take the id from its output when resuming) gives event counts per phase and the last events: continue from the phase the last event shows.
 
 ## Journal
 
 Append one event at each phase transition, decision, verification result and review result. Phases: `research`, `grill`, `implement`, `verify`, `review`, `loop`, `ship`, `decision`, `note`. The data is a JSON object; keep it short and factual (what, result, evidence), never raw logs or file contents.
 
 ```
-node "${CLAUDE_PLUGIN_ROOT}/scripts/run-journal.ts" append <phase> '<json>'
+node "${CLAUDE_PLUGIN_ROOT}/scripts/run-journal.ts" append --run <id> <phase> '<json>'
 ```
 
-On PowerShell pass the JSON on stdin instead: `'{"a":1}' | node "<script>" append <phase> -`. The script redacts URL credentials, tokens, `NAME_TOKEN=` assignments, flag values and any value under a secret-looking key, caps sizes, refuses symlinks and appends one whole line. Lines are never edited; a correction is a new event. A corrupt line costs only itself.
+On PowerShell pass the JSON on stdin instead, with the same script path as above (`${CLAUDE_PLUGIN_ROOT}` is substituted by the plugin when this skill loads) and your own phase name where `<phase>` stands: `'{"a":1}' | node "${CLAUDE_PLUGIN_ROOT}/scripts/run-journal.ts" append --run <id> <phase> -`. The script redacts URL credentials, tokens, `NAME_TOKEN=` assignments, flag values and any value under a secret-looking key, caps sizes, refuses symlinks and hardlinked files, and appends one whole line. It also rejects a `loop`, `verify` or `review` event whose `failing` or `unresolved` is missing, negative, fractional or a string (an array counts by length): fix the JSON and append again, never leave a count out to make a round look better. Limit: a path swapped for a link between the script's checks and its open is not caught; h7 guards against accidents, not a hostile process in the same repo. Lines are never edited; a correction is a new event. A corrupt line costs only itself.
 
-Events the loop relies on, for the round score:
+Events the loop relies on. Only `loop` events are scored; the others are the record the numbers come from:
 
 | Phase | Data |
 |---|---|
 | `verify` | `{"failing": <count of layers not pass or na>, "layers": ["unit: failing (...)"]}` from `verify-state.ts check` (its `incomplete` list) |
 | `review` | `{"unresolved": <proven findings not yet fixed>, "ids": ["F1"], "skipped": ["lens: reason"], "reviewer": "<model>", "independent": true}` |
-| `loop` | `{"round": <n>, "failing": <n>, "unresolved": <n>}`, closes a round |
+| `loop` | `{"round": <n>, "failing": <n>, "unresolved": <n>}`, closes a round; both counts are required |
 | `decision` | `{"question": "...", "choice": "...", "why": "...", "adr": "docs/adr/NNNN-x.md"}` (adr when one was written) |
 
 ## 1. Research
@@ -108,10 +108,10 @@ A round is one pass of step 4 plus fixes. Close it:
 4. Ask the script, not your judgement:
 
 ```
-node "${CLAUDE_PLUGIN_ROOT}/scripts/run-journal.ts" progress
+node "${CLAUDE_PLUGIN_ROOT}/scripts/run-journal.ts" progress --run <id>
 ```
 
-It prints `rounds[]` (each with `failing`, `unresolved`, `score` and `improving`), `streak`, `limit`, `stop`, `clean` and `reason`. A round improves when its score (failing layers plus unresolved proven findings) is lower than the round before, or is zero; the first round is the baseline. Exit 1 and `stop: true` mean 5 consecutive non-improving rounds: stop the loop, do not ship, go to the report (step 7) with what is failing, what was tried each round (from the journal) and what you suggest the user decides. Otherwise continue while the done predicate does not hold.
+It prints `rounds[]` (each with `failing`, `unresolved`, `score` and `improving`), `streak`, `limit`, `stop`, `clean` and `reason`. A round improves only when its score (failing layers plus unresolved proven findings) is lower than the best score of all earlier rounds, or is zero, so oscillating does not help; the first round has nothing to beat and counts as non-improving unless it is already zero, so five stuck rounds in a row are five rounds. `--limit <n>` can only lower the limit, never raise it above 5. `progress` also reads `.h7/verify.json` and `.h7/review/proven.json` when they exist: `observed` shows what they say and `warnings[]` lists every disagreement with what you reported; `clean` is never true while there is a warning, so rerun verify and review rather than fixing the numbers. Exit 1 and `stop: true` mean 5 consecutive non-improving rounds: stop the loop, do not ship, go to the report (step 7) with what is failing, what was tried each round (from the journal) and what you suggest the user decides. Otherwise continue while the done predicate does not hold.
 
 Done = rule 1 holds. Check it, do not assume it: `verify-state.ts check` exits 0, the last review reports zero unresolved proven findings, every `decision` is answered, and the repo's full local check command from `verification.md` passes on the head commit. `clean: true` from `progress` only says the counts are zero; the rest of the predicate still has to be checked. Anything short of it goes back to step 1.
 

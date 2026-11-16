@@ -49,4 +49,8 @@ describe('work skill', () => {
   it('documents every journal phase', () => {
     for (const phase of PHASES) assert.ok(skill.includes(`\`${phase}\``), phase);
   });
+
+  it('keeps the run id, explains the brake as the script computes it, and the PowerShell form', () => {
+    for (const phrase of ['--run <id>', 'CURRENT', 'best score', 'never raise it above 5', 'warnings[]', 'observed', 'both counts are required', 'info/exclude', '${CLAUDE_PLUGIN_ROOT}/scripts/run-journal.ts" append --run <id> <phase> -']) assert.ok(skill.includes(phrase), phrase);
+  });
 });
