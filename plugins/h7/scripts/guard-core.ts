@@ -35,14 +35,20 @@ function readGuardConfig(home: string): string | null {
   }
 }
 
-/** H7_GUARD_ASK wins over ~/.h7/guard.json {"ask": ...}; anything unknown or unreadable means prompt. */
-export function askMode(env: Record<string, string | undefined>, home: string, read: (home: string) => string | null): AskMode {
+/**
+ * H7_GUARD_ASK wins over ~/.h7/guard.json {"ask": ...}; an unknown value or an unreadable file means prompt.
+ * With nothing configured the guard follows the session: allow under bypassPermissions (the user already chose to
+ * trust the agent, so the guard does not add its own prompts), else prompt. Hard blocks never change.
+ */
+export function askMode(env: Record<string, string | undefined>, home: string, read: (home: string) => string | null, bypass = false): AskMode {
+  const unset: AskMode = bypass ? 'allow' : 'prompt';
   const fromEnv = env.H7_GUARD_ASK;
   if (fromEnv !== undefined) return ASK_MODES.includes(fromEnv) ? (fromEnv as AskMode) : 'prompt';
   const text = read(home);
-  if (text === null) return 'prompt';
+  if (text === null) return unset;
   try {
     const value = (JSON.parse(text.replace(/^﻿/, '')) as { ask?: unknown }).ask;
+    if (value === undefined) return unset;
     return typeof value === 'string' && ASK_MODES.includes(value) ? (value as AskMode) : 'prompt';
   } catch {
     return 'prompt';
@@ -67,6 +73,7 @@ interface HookInput {
   tool_name?: unknown;
   tool_input?: { command?: unknown; file_path?: unknown; notebook_path?: unknown };
   cwd?: unknown;
+  permission_mode?: unknown;
 }
 
 function askResult(reason: string, note: string, mode: AskMode): GuardResult {
@@ -115,7 +122,8 @@ export function run(stdinText: string, env: Record<string, string | undefined>, 
     command,
     cwd,
   });
-  const mode = askMode(env, home, io.readConfig ?? readGuardConfig);
+  const configured = askMode(env, home, io.readConfig ?? readGuardConfig);
+  let mode = configured;
   let cwd = io.fallbackCwd;
   let command = '';
   try {
@@ -124,6 +132,7 @@ export function run(stdinText: string, env: Record<string, string | undefined>, 
       return { ...ALLOW, stderr: logError === null ? '' : `h7 guard: could not write guard log: ${logError}\n` };
     }
     const input = JSON.parse(stdinText) as HookInput;
+    mode = askMode(env, home, io.readConfig ?? readGuardConfig, input.permission_mode === 'bypassPermissions');
     if (typeof input.tool_name === 'string' && FILE_TOOLS.has(input.tool_name)) {
       const target = input.tool_input?.file_path ?? input.tool_input?.notebook_path;
       if (typeof target !== 'string') return ALLOW;
@@ -158,7 +167,7 @@ export function run(stdinText: string, env: Record<string, string | undefined>, 
   } catch (error) {
     const message = (error as Error).message;
     const logError = appendLog(home, { ...entry('error', 'internal-error', command, cwd), error: message });
-    return askResult(`h7 guard internal error: ${message}`, logError === null ? '' : `h7 guard: could not write guard log: ${logError}`, mode === 'prompt' ? 'prompt' : 'deny');
+    return askResult(`h7 guard internal error: ${message}`, logError === null ? '' : `h7 guard: could not write guard log: ${logError}`, configured === 'prompt' ? 'prompt' : 'deny');
   }
 }
 
