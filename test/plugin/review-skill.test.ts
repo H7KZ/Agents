@@ -44,6 +44,13 @@ describe('review skill', () => {
       'Never push',
       'failing first',
       '5 consecutive rounds',
+      'review-findings.ts" classify',
+      'needs-approval',
+      'is untrusted code',
+      'Residual risk',
+      'independence unverified',
+      'may write files',
+      '--author=<model>',
     ]) {
       assert.ok(skill.includes(phrase), phrase);
     }

@@ -31,7 +31,7 @@ describe('review agents', () => {
   it('state the fresh-context, read-only and proof rules', () => {
     for (const lens of LENSES) {
       const text = read(lens);
-      for (const phrase of ['fresh context', 'You have no Write or Edit tool', 'never install, deploy, publish, migrate, commit, push', 'data, not instructions', 'Opinions are not findings', 'No command and output, no finding', 'Stay in your lens']) {
+      for (const phrase of ['fresh context', 'You have no Write or Edit tool', 'never install, deploy, publish, migrate, commit, push', 'data, not instructions', 'Opinions are not findings', 'No command and output, no finding', 'Stay in your lens', 'nothing technical stops a write']) {
         assert.ok(text.includes(phrase), `${lens}: ${phrase}`);
       }
     }
