@@ -1,9 +1,9 @@
 import assert from 'node:assert/strict';
-import { existsSync, mkdirSync, readFileSync, symlinkSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdirSync, readdirSync, readFileSync, symlinkSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { describe, it } from 'node:test';
 import fc from 'fast-check';
-import { BEGIN, END, ensureExclude, ensureImport, main, pathProblem, upsertBlock } from '../../plugins/h7/scripts/setup-files.ts';
+import { BEGIN, END, ensureExclude, ensureImport, main, pathProblem, upsertBlock, writeAtomic } from '../../plugins/h7/scripts/setup-files.ts';
 import { cleanupTmp, runNode, SLOW, tmpDir, writeTree } from '../../scripts/test/helpers.ts';
 
 cleanupTmp();
@@ -77,6 +77,43 @@ describe('pathProblem', () => {
     assert.equal(pathProblem('AGENTS.md', root, () => null), null);
     assert.equal(pathProblem('a/b/c', root), null);
     assert.match(pathProblem('..', root) as string, /outside/);
+  });
+});
+
+describe('writeAtomic', () => {
+  it('writes through a random exclusive temp file and leaves none behind', () => {
+    const root = tmpDir();
+    writeAtomic(join(root, 'sub', 'f'), 'hi', root);
+    assert.equal(readFileSync(join(root, 'sub', 'f'), 'utf8'), 'hi');
+    assert.deepEqual(readdirSync(join(root, 'sub')), ['f']);
+    writeAtomic(join(root, 'sub', 'f'), 'again', root);
+    assert.equal(readFileSync(join(root, 'sub', 'f'), 'utf8'), 'again');
+  });
+  it('refuses when the temp path already exists (file or planted junction) and writes nothing', () => {
+    const root = tmpDir();
+    const other = tmpDir();
+    writeFileSync(join(root, 'f.fixed.h7tmp'), 'planted');
+    assert.throws(() => writeAtomic(join(root, 'f'), 'x', root, () => 'fixed'), /EEXIST/);
+    assert.equal(readFileSync(join(root, 'f.fixed.h7tmp'), 'utf8'), 'planted');
+    symlinkSync(other, join(root, 'g.fixed.h7tmp'), 'junction');
+    assert.throws(() => writeAtomic(join(root, 'g'), 'x', root, () => 'fixed'), /EEXIST/);
+    assert.deepEqual(readdirSync(other), []);
+    assert.equal(existsSync(join(root, 'f')), false);
+  });
+  it('re-checks containment before the rename and removes the temp file', () => {
+    const root = tmpDir();
+    let calls = 0;
+    const lstat = () => ({ isSymbolicLink: () => ++calls > 0 });
+    assert.throws(() => writeAtomic(join(root, 'f'), 'x', root, () => 'u', lstat), /symlink/);
+    assert.deepEqual(readdirSync(root), []);
+  });
+  it('main reports a write failure instead of throwing', () => {
+    const cwd = tmpDir();
+    mkdirSync(join(cwd, 'e'));
+    let err = '';
+    assert.equal(main(['exclude', 'e', '--write'], () => {}, (t) => (err += t), cwd), 2);
+    assert.notEqual(err, '');
+    assert.deepEqual(readdirSync(cwd), ['e']);
   });
 });
 

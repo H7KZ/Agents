@@ -1,4 +1,5 @@
-import { existsSync, lstatSync, mkdirSync, readFileSync, realpathSync, renameSync, writeFileSync } from 'node:fs';
+import { randomUUID } from 'node:crypto';
+import { existsSync, lstatSync, mkdirSync, readFileSync, realpathSync, renameSync, unlinkSync, writeFileSync } from 'node:fs';
 import { dirname, isAbsolute, relative, resolve, sep } from 'node:path';
 
 export const BEGIN = '<!-- h7:begin -->';
@@ -90,11 +91,22 @@ export function pathProblem(file: string, root: string, lstat: Lstat = safeLstat
   return rel === '..' || rel.startsWith(`..${sep}`) || isAbsolute(rel) ? `refusing path outside the repo: ${file}` : null;
 }
 
-function writeAtomic(file: string, text: string): void {
+/** Exclusive random temp file in the target directory, containment re-checked right before the rename. Throws on any refusal. */
+export function writeAtomic(file: string, text: string, root: string, uuid: () => string = randomUUID, lstat: Lstat = safeLstat): void {
   mkdirSync(dirname(file), { recursive: true });
-  const temp = `${file}.h7tmp-${process.pid}`;
-  writeFileSync(temp, text);
-  renameSync(temp, file);
+  const temp = `${file}.${uuid()}.h7tmp`;
+  writeFileSync(temp, text, { flag: 'wx' });
+  const problem = pathProblem(file, root, lstat);
+  if (problem !== null) {
+    unlinkSync(temp);
+    throw new Error(problem);
+  }
+  try {
+    renameSync(temp, file);
+  } catch (error) {
+    unlinkSync(temp);
+    throw error;
+  }
 }
 
 const USAGE = 'usage: setup-files.ts agents <file> <body-file> [--replace] [--write] | claude <file> [--write] | exclude <file> [--write]';
@@ -128,7 +140,12 @@ export function main(argv: string[], out: (text: string) => void, err: (text: st
   const changes = ['created', 'appended', 'updated'].includes(result.status);
   const written = changes && flags.includes('--write');
   if (written) {
-    writeAtomic(resolve(cwd, file), result.text);
+    try {
+      writeAtomic(resolve(cwd, file), result.text, cwd);
+    } catch (error) {
+      err((error as Error).message);
+      return 2;
+    }
   }
   out(JSON.stringify({ file, status: result.status, written, lines: lines(result.text), ...(result.existing === undefined ? {} : { existing: result.existing }) }));
   return 0;
