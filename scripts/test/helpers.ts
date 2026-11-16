@@ -7,7 +7,7 @@ import { after } from 'node:test';
 const created: string[] = [];
 
 export function tmpDir(prefix = 'h7-test-'): string {
-  const dir = realpathSync(mkdtempSync(join(tmpdir(), prefix)));
+  const dir = realpathSync.native(mkdtempSync(join(realpathSync.native(tmpdir()), prefix)));
   created.push(dir);
   return dir;
 }
