@@ -26,7 +26,7 @@ describe('verify skill', () => {
   });
 
   it('states the bar and its guard rails', () => {
-    for (const phrase of ['100%', 'at least 80%', 'failing first', 'AskUserQuestion', 'Bombadil', 'stop_hook_active', 'verify-<app>', 'Never push']) assert.ok(skill.includes(phrase), phrase);
+    for (const phrase of ['100%', 'at least 80%', 'failing first', 'AskUserQuestion', 'Bombadil', 'stop_hook_active', 'verify-<app>', 'Never push', 'mkdir -p .h7', '--allow-unmeasured', 'warnings[]']) assert.ok(skill.includes(phrase), phrase);
   });
 
   it('does not register the Stop gate globally or in its own frontmatter', () => {

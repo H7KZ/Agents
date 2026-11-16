@@ -23,7 +23,7 @@ function memoryIo(initial: Record<string, string> = {}): StateIo & { files: Reco
 
 function allPass(): VerifyState {
   let state = freshState(NOW);
-  for (const layer of LAYERS) state = setLayer(state, layer, 'pass', '', NOW);
+  for (const layer of LAYERS) state = setLayer(state, layer, 'pass', 'ok', NOW);
   return state;
 }
 
@@ -113,7 +113,7 @@ describe('verify-state CLI', () => {
     const check = run(['check'], io);
     assert.equal(check.code, 1);
     assert.equal(JSON.parse(check.out).complete, false);
-    for (const layer of LAYERS.filter((l) => l !== 'bombadil')) run(['set', layer, 'pass'], io);
+    for (const layer of LAYERS.filter((l) => l !== 'bombadil')) run(['set', layer, 'pass', 'ok'], io);
     const done = run(['check'], io);
     assert.equal(done.code, 0);
     assert.deepEqual(JSON.parse(done.out), { complete: true, incomplete: [] });
@@ -127,6 +127,7 @@ describe('verify-state CLI', () => {
     assert.equal(JSON.parse(shown.out).incomplete.length, LAYERS.length);
   });
 
+it('a pass without evidence is incomplete, and the CLI refuses to record one', () => {    const bare = setLayer(allPass(), 'unit', 'pass', '', NOW);    assert.deepEqual(incomplete(bare), ['unit: passed without evidence']);    assert.deepEqual(incomplete(setLayer(bare, 'unit', 'pass', '  ', NOW)), ['unit: passed without evidence']);    const io = memoryIo();    run(['init'], io);    for (const status of ['pass', 'fail', 'na']) {      const result = run(['set', 'unit', status], io);      assert.equal(result.code, 2, status);      assert.match(result.err, /needs one line of evidence/);    }    assert.equal(parseState(io.files[file] as string)?.layers.unit.status, 'pending');    assert.equal(run(['set', 'unit', 'pending'], io).code, 0);  });
   it('rejects bad usage, bad set arguments and a missing or malformed state', () => {
     const io = memoryIo();
     assert.equal(run([], io).code, 2);
@@ -165,7 +166,7 @@ describe('verify-state process', () => {
     assert.equal(run('init').status, 0);
     assert.equal(run('check').status, 1);
     assert.equal(run('bogus').status, 2);
-    assert.equal(run('set', 'lint', 'pass').status, 0);
+    assert.equal(run('set', 'lint', 'pass', 'ok').status, 0);
     assert.equal(JSON.parse(readFileSync(join(dir, STATE_FILE), 'utf8')).layers.lint.status, 'pass');
   });
 });

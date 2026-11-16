@@ -64,6 +64,7 @@ export function incomplete(state: VerifyState): string[] {
     if (status === 'pending') problems.push(`${layer}: not run yet`);
     else if (status === 'fail') problems.push(`${layer}: failing${reason ? ` (${reason})` : ''}`);
     else if (status === 'na' && (reason ?? '').trim() === '') problems.push(`${layer}: marked n/a without a reason`);
+    else if (status === 'pass' && (reason ?? '').trim() === '') problems.push(`${layer}: passed without evidence`);
   }
   return problems;
 }
@@ -118,7 +119,12 @@ export function main(argv: string[], out: (text: string) => void, err: (text: st
       err(`${USAGE}\nlayers: ${LAYERS.join(', ')}`);
       return 2;
     }
-    save(setLayer(current, layer, status, reason.join(' ').trim(), now()));
+    const note = reason.join(' ').trim();
+    if (status !== 'pending' && note === '') {
+      err(`${layer} ${status} needs one line of evidence or reason`);
+      return 2;
+    }
+    save(setLayer(current, layer, status, note, now()));
     out(JSON.stringify({ layer, status }));
     return 0;
   }

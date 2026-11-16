@@ -20,13 +20,14 @@ Run inside the target repo, on a feature branch. Scope = what the change touches
 ## 1. Scope and state
 
 ```
+mkdir -p .h7
 node "${CLAUDE_PLUGIN_ROOT}/scripts/verify-scope.ts" > .h7/scope.json
 node "${CLAUDE_PLUGIN_ROOT}/scripts/verify-state.ts" init
 ```
 
-`scope.json` lists `files[]` (`path`, `kind` source, test or other, changed `ranges`, `whole` for untracked files) against the merge base with the default branch. Pass `--base <ref>` when the default branch is not `main` or `master`. Keep `.h7/` out of git (`/h7:setup` does this). If there are no source changes, mark every layer `na` with "no source change" and stop.
+`scope.json` lists `warnings[]` (read them: for example no merge base) and `files[]` (`path`, `kind` source, test or other, changed `ranges`, `whole` for untracked files) against the merge base with the default branch. Pass `--base <ref>` when the default branch is not `main` or `master`. Keep `.h7/` out of git (`/h7:setup` does this). If there are no source changes, mark every layer `na` with "no source change" and stop.
 
-Record each layer as you finish it:
+Record each layer as you finish it. Every status needs one line of evidence or reason (the command and its result); the CLI refuses a bare `pass` and the gate treats one as incomplete:
 
 ```
 node "${CLAUDE_PLUGIN_ROOT}/scripts/verify-state.ts" set <layer> <pass|fail|na> <one line of evidence or reason>
@@ -62,7 +63,7 @@ On decline, the layer is `fail` with "tool not installed (declined)", never `na`
 node "${CLAUDE_PLUGIN_ROOT}/scripts/diff-coverage.ts" --lcov lcov.info --scope .h7/scope.json --baseline baseline.lcov
 ```
 
-Add `--lines <pct> --branches <pct>` only for overrides from `verification.md`. Exit 0 passes; 1 prints `files[]` with `uncoveredLines`, `uncoveredBranches` and `missing` (a changed source file absent from the report). Write tests that exercise each listed line and branch. Never exclude code from coverage to pass. Lines the tool cannot see, such as a thin entry guard, need a subprocess test.
+Add `--lines <pct> --branches <pct>` only for overrides from `verification.md`. Exit 0 passes; 2 is an error (for example two coverage records match one path: fix the report or its path prefix); 1 fails, with `unmeasured` listing changed source that has no instrumented line or branch in its changed range, or no changed source at all (nothing proves coverage, so it fails). Use `--allow-unmeasured` only when the lines are types, comments or configuration, and say so in the evidence. A failure prints `files[]` with `uncoveredLines`, `uncoveredBranches` and `missing` (a changed source file absent from the report). Write tests that exercise each listed line and branch. Never exclude code from coverage to pass. Lines the tool cannot see, such as a thin entry guard, need a subprocess test.
 4. Platform independence: do not add code whose branches only one OS runs, unless a test for each side exists.
 
 ## 5. Mutation (at least 80% on changed files, every run)

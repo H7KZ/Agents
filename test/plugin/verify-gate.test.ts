@@ -24,7 +24,7 @@ function memoryIo(state?: VerifyState | string): StateIo & { files: Record<strin
   };
 }
 
-const passing = (): VerifyState => LAYERS.reduce((s, l) => setLayer(s, l, 'pass', '', NOW), freshState(NOW));
+const passing = (): VerifyState => LAYERS.reduce((s, l) => setLayer(s, l, 'pass', 'ok', NOW), freshState(NOW));
 const allow = { stdout: '', stderr: '' };
 
 describe('verify gate', () => {
