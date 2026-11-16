@@ -93,10 +93,13 @@ function unwrapRunner(argv: string[], spec: OptionSpec): Simple | null {
 }
 
 /** Only a bare --dry-run (or =true, =client, =server) is a dry run; --dry-run=false runs for real. */
-function isDryRun(parsed: ParsedArgs): boolean {
+function isDryRun(parsed: ParsedArgs, argv: string[]): boolean {
   if (!parsed.flags.includes('--dry-run')) return false;
   const value = parsed.options.get('--dry-run');
-  return value === undefined || ['true', 'client', 'server'].includes(value.toLowerCase());
+  if (value !== undefined) return ['true', 'client', 'server'].includes(value.toLowerCase());
+  // A word right after a bare --dry-run may be its value ("--dry-run false"): only skip when nothing follows or another flag does.
+  const next = argv[argv.indexOf('--dry-run') + 1];
+  return next === undefined || next.startsWith('-');
 }
 
 export function evaluateDeploy(simple: Simple): Decision | null {
@@ -108,7 +111,7 @@ export function evaluateDeploy(simple: Simple): Decision | null {
   const parsed = parseArgs(argv, PACKAGE_MANAGERS.has(name) ? NPM_SPEC : { valueShort: 'R', valueLong: ['--repo'] });
   const [first, second] = parsed.positionals;
   const flags = parsed.flags;
-  if (isDryRun(parsed)) return null;
+  if (isDryRun(parsed, argv)) return null;
   if ((name === 'pnpm' || name === 'yarn' || name === 'npm') && (first === 'dlx' || first === 'exec')) {
     const inner = unwrapRunner(argv.slice(positionalIndex(argv, NPM_SPEC) + 1), RUNNER_SPEC);
     return inner === null ? null : evaluateDeploy(inner);

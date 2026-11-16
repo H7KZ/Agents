@@ -202,3 +202,83 @@ describe('parser uncertainty resolves to ask', () => {
     ]);
   });
 });
+
+describe('batch 4: interpreter flags, variable assigners, dry-run words', () => {
+  it('program flags are per interpreter', () => {
+    table({}, [
+      ['echo x | bash -e', INDIRECT],
+      ['echo x | bash -lc ls', null],
+      ['echo x | sh -c ls', null],
+      ['echo x | zsh -c ls', null],
+      ['echo x | python3 -e 1', INDIRECT],
+      ['echo x | python3 -c 1', null],
+      ['echo x | python -m json.tool', null],
+      ['echo x | node -c x', INDIRECT],
+      ['echo x | node -e 1', null],
+      ['echo x | node --print 1', null],
+      ['echo x | perl -w', INDIRECT],
+      ['echo x | perl -E say', null],
+      ['echo x | perl -e 1', null],
+      ['echo x | ruby -e 1', null],
+      ['echo x | ruby -c', INDIRECT],
+      ['echo x | php -r 1', null],
+      ['echo x | php -e', INDIRECT],
+      ['echo x | pwsh -nop', INDIRECT],
+      ['echo x | pwsh -NoProfile -Command 1', null],
+      ['echo x | PWSH -c 1', null],
+      ['echo x | powershell -EncodedCommand AAA', null],
+      ['echo x | powershell -ec AAA', null],
+      ['echo x | powershell -File x.ps1', null],
+      ['echo x | powershell -f x.ps1', null],
+      ['echo x | powershell /c 1', null],
+      ['echo x | cmd /C dir', null],
+      ['echo x | cmd /k dir', null],
+      ['echo x | cmd /q', INDIRECT],
+      ['echo x | deno', INDIRECT],
+      ['echo x | deno run x.ts', null],
+      ['echo x | bash -o pipefail -c ls', INDIRECT],
+    ]);
+  });
+
+  it('constructs that can assign variables make every variable in a delete target unresolved', () => {
+    const env = { tmpDirs: ['/tmp'], tmpVars: { TMPDIR: '/tmp' } };
+    table(env, [
+      ['rm -rf $TMPDIR/foo', null],
+      ['read TMPDIR; rm -rf $TMPDIR/foo', RM_ASK],
+      ['local TMPDIR=/; rm -rf $TMPDIR/foo', RM_ASK],
+      ['declare -x TMPDIR=/; rm -rf $TMPDIR/foo', RM_ASK],
+      ['printf -v TMPDIR / ; rm -rf $TMPDIR/foo', RM_ASK],
+      ['getopts a TMPDIR; rm -rf $TMPDIR/foo', RM_ASK],
+      ['eval "TMPDIR=/"; rm -rf $TMPDIR/foo', RM_ASK],
+      ['for TMPDIR in /; do rm -rf $TMPDIR/foo; done', RM_ASK],
+      ['while read TMPDIR; do rm -rf $TMPDIR/foo; done < list', RM_ASK],
+      ['echo ${TMPDIR:=/}; rm -rf $TMPDIR/foo', RM_ASK],
+      ['echo ${TMPDIR=/}; rm -rf $TMPDIR/foo', RM_ASK],
+      ['read X; rm -rf ~/foo', RM_ASK],
+      ['read X; rm -rf dist', null],
+      ['read X; rm -rf /tmp/foo', null],
+    ]);
+    table({ dialect: 'ps', platform: 'win32', tmpDirs: ['C:\\T'], tmpVars: { TEMP: 'C:\\T' } }, [
+      ["Set-Item env:TEMP 'C:\\'; Remove-Item -Recurse -Force $env:TEMP\\x", RM_ASK],
+      ["New-Item env:TEMP -Value 'C:\\' ; Remove-Item -Recurse -Force $env:TEMP\\x", RM_ASK],
+      ["[Environment]::SetEnvironmentVariable('TEMP','C:\\'); Remove-Item -Recurse -Force $env:TEMP\\x", RM_ASK],
+      ["Set-Variable T 'C:\\'; Remove-Item -Recurse -Force $T", RM_ASK],
+      ["$x = 1; Remove-Item -Recurse -Force $env:TEMP\\x", RM_ASK],
+      ['foreach ($d in 1) { Remove-Item -Recurse -Force $env:TEMP\\x }', RM_ASK],
+      ['Remove-Item -Recurse -Force $env:TEMP\\x', null],
+    ]);
+    table({ dialect: 'ps', platform: 'win32' }, [['set /p X=; Remove-Item -Recurse -Force C:\\x', RM]]);
+  });
+
+  it('--dry-run followed by a word may carry a value', () => {
+    table({}, [
+      ['npm publish --dry-run false', DEPLOY],
+      ['npm publish --dry-run 0', DEPLOY],
+      ['npm publish --dry-run no', DEPLOY],
+      ['npm publish --dry-run ./pkg', DEPLOY],
+      ['npm publish --dry-run', null],
+      ['npm publish --dry-run --access public', null],
+      ['npm publish --dry-run -w pkg', null],
+    ]);
+  });
+});

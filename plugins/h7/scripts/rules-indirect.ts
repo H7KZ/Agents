@@ -6,8 +6,28 @@ const INTERPRETERS = new Set([
   'sh', 'bash', 'zsh', 'dash', 'ksh', 'ash', 'fish', 'pwsh', 'powershell', 'pwsh-preview', 'cmd',
   'python', 'python3', 'node', 'perl', 'ruby', 'php', 'deno',
 ]);
-/** Flags that hand the interpreter its program inline, so stdin is data rather than code. */
-const INLINE_PROGRAM = new Set(['-c', '-e', '-E', '-p', '-command', '-encodedcommand', '-ec', '-file', '--eval', '--print', '/c', '/k', '-m']);
+const SHELL_LIKE = ['sh', 'bash', 'zsh', 'dash', 'ksh', 'ash', 'fish'];
+const POWERSHELLS = ['pwsh', 'powershell', 'pwsh-preview'];
+const EXACT_FLAGS: Record<string, string[]> = {
+  python: ['-c', '-m'],
+  python3: ['-c', '-m'],
+  node: ['-e', '-p', '--eval', '--print'],
+  perl: ['-e', '-E'],
+  ruby: ['-e'],
+  php: ['-r'],
+};
+const POWERSHELL_PARAMS = ['command', 'encodedcommand', 'file'];
+
+/** Per-interpreter test for a flag that hands the program over inline (or as a script file), so stdin is data. */
+function isProgramFlag(name: string, arg: string): boolean {
+  if (SHELL_LIKE.includes(name)) return /^-[A-Za-z]*c[A-Za-z]*$/.test(arg);
+  if (POWERSHELLS.includes(name)) {
+    const param = arg.replace(/^[-/]/, '').toLowerCase();
+    return /^[-/]/.test(arg) && param !== '' && (param === 'ec' || POWERSHELL_PARAMS.some((full) => full.startsWith(param)));
+  }
+  if (name === 'cmd') return ['/c', '/k'].includes(arg.toLowerCase());
+  return (EXACT_FLAGS[name] ?? []).includes(arg);
+}
 const EVALUATORS = new Set(['invoke-expression', 'iex']);
 const XARGS_VALUE_FLAGS = new Set(['-I', '-n', '-P', '-d', '-L', '-E', '-s', '-a']);
 /** Flags with no value, or with an optional value that can only be attached (-i, -l, -e). */
@@ -53,12 +73,19 @@ function xargsCommand(argv: string[]): XargsCommand {
   return { kind: 'none' };
 }
 
-/** True when the interpreter surely gets its program from an argument (a script path or an inline flag). */
-function programGiven(argv: string[]): boolean {
-  const first = argv[0];
-  if (first === undefined) return false;
-  if (!first.startsWith('-') && !first.startsWith('+')) return true;
-  return argv.some((arg) => INLINE_PROGRAM.has(arg.toLowerCase()));
+/**
+ * True when the interpreter surely gets its program from an argument: a program flag, or a script path that is
+ * the first word. A word after other options might be an option's value, so that is not certain.
+ */
+function programGiven(name: string, argv: string[]): boolean {
+  let sawOption = false;
+  for (const arg of argv) {
+    if (isProgramFlag(name, arg)) return true;
+    const option = arg.startsWith('-') || arg.startsWith('+') || (name === 'cmd' && arg.startsWith('/'));
+    if (!option) return !sawOption;
+    sawOption = true;
+  }
+  return false;
 }
 
 export function evaluateIndirection(simple: Simple, flow: Flow): Decision | null {
@@ -76,6 +103,6 @@ export function evaluateIndirection(simple: Simple, flow: Flow): Decision | null
   if (!INTERPRETERS.has(name)) return null;
   const readsStdin = flow.piped || flow.input;
   const explicitStdin = argv.includes('-s') || argv.includes('-');
-  if (explicitStdin || (readsStdin && !programGiven(argv))) return indirect(`Feeding ${name} from stdin`);
+  if (explicitStdin || (readsStdin && !programGiven(name, argv))) return indirect(`Feeding ${name} from stdin`);
   return null;
 }

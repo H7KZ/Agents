@@ -37,6 +37,8 @@ export interface ScanState {
   untrackedClean?: boolean;
   /** Paths added to the index earlier in the chain. */
   staged: string[];
+  /** True when the command contains a construct that can assign variables, so no variable can be trusted. */
+  assigns?: boolean;
   /** Git aliases defined earlier in the chain. */
   aliases: Record<string, string>;
 }

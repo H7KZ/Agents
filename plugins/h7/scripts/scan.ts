@@ -14,10 +14,25 @@ const DIRECTORY_CHANGERS = new Set(['cd', 'chdir', 'pushd', 'set-location', 'sl'
 const ENV_SETTERS = new Set(['export', 'set', 'declare', 'typeset', 'readonly']);
 const LEAVERS = new Set(['exit', 'return']);
 
+/** Anything that can assign a variable the guard does not model; then no variable in a delete target is trusted. */
+const ASSIGNERS = new RegExp(
+  [
+    String.raw`\b(?:read|local|declare|typeset|getopts|eval|mapfile|readarray)\b`,
+    String.raw`\bprintf\s+-v\b`,
+    String.raw`\b(?:for|select)\s+\w+\s+in\b`,
+    String.raw`\$\{[^}]*:?=`,
+    String.raw`\b(?:Set-Item|New-Item|Set-Variable|New-Variable|SetEnvironmentVariable|foreach|ForEach-Object)\b`,
+    String.raw`\bset\s+/p\b`,
+    String.raw`\$[A-Za-z_][\w:]*\s*[-+*/]?=`,
+  ].join('|'),
+  'i',
+);
+
 const REASSIGNABLE = ['TMPDIR', 'TEMP', 'TMP', 'HOME', 'USERPROFILE'];
 
 /** Variables the command itself reassigns no longer hold their hook-time value, so they stay unresolved. */
-function withReassigned(ctx: Ctx, env: Record<string, string>): Ctx {
+function withReassigned(ctx: Ctx, env: Record<string, string>, assigns: boolean): Ctx {
+  if (assigns) return { ...ctx, tmp: { ...ctx.tmp, vars: { '*': null } } };
   const names = Object.keys(env).map((name) => name.toUpperCase());
   const hit = REASSIGNABLE.filter((name) => names.includes(name));
   if (hit.length === 0) return ctx;
@@ -84,6 +99,7 @@ export function scan(command: string, dialect: Dialect, ctx: Ctx, state: ScanSta
   if (depth > MAX_DEPTH) {
     return [ask('unscannable-command', 'The command nests shells too deeply to inspect. Run it as separate, simple commands.')];
   }
+  if (depth === 0) state.assigns = ASSIGNERS.test(command);
   const tokens = tokenize(command, dialect);
   const found: Decision[] = [];
   const scanNested = (script: string, kind: Dialect): Decision[] => scan(script, kind, ctx, cloneState(state), depth + 1);
@@ -107,7 +123,7 @@ export function scan(command: string, dialect: Dialect, ctx: Ctx, state: ScanSta
       afterCd = false;
       return;
     }
-    const here = withReassigned(ctx, { ...state.env, ...simple.env });
+    const here = withReassigned(ctx, { ...state.env, ...simple.env }, state.assigns === true);
     const flow: Flow = { piped: isPipe(op), input: tokens.inputs[index] as boolean, call: tokens.calls[index] as boolean, powershell: dialect === 'ps' };
     found.push(...evaluateSimple(simple, state, here, flow, scanNested));
     const inner = nestedScript(simple);

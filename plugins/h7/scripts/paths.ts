@@ -65,13 +65,15 @@ export function makePaths(platform: Platform, realpath: Realpath): Paths {
 
   const expand = (word: string, home: string, vars: Record<string, string | null> = {}): string | null => {
     let s = word;
-    const homeKnown = lookup('HOME', vars) !== null && lookup('USERPROFILE', vars) !== null;
+    // A '*' entry set to null freezes every variable (and ~): the command may assign any of them.
+    const frozen = Object.hasOwn(vars, '*') && vars['*'] === null;
+    const homeKnown = !frozen && lookup('HOME', vars) !== null && lookup('USERPROFILE', vars) !== null;
     if (s === '~' || s.startsWith('~/') || s.startsWith('~\\')) {
       if (!homeKnown) return null;
       s = home + s.slice(1);
     }
     s = s.replace(HOME_VARIABLE, (match) => (homeKnown ? home : match));
-    s = s.replace(NAMED_VARIABLE, (match, braced, bare, percent) => lookup(braced ?? bare ?? percent, vars) ?? match);
+    s = s.replace(NAMED_VARIABLE, (match, braced, bare, percent) => (frozen ? undefined : lookup(braced ?? bare ?? percent, vars)) ?? match);
     if (/^~./.test(s) || /[$`]/.test(s)) return null;
     if (platform === 'win32' && /%[A-Za-z_][A-Za-z0-9_]*%/.test(s)) return null;
     return s;
