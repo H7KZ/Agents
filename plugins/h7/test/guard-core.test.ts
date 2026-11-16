@@ -1,13 +1,15 @@
 import assert from 'node:assert/strict';
-import { readFileSync } from 'node:fs';
+import { readFileSync, realpathSync } from 'node:fs';
 import { join } from 'node:path';
 import { describe, it } from 'node:test';
-import { runGuard, type GuardIo } from '../scripts/guard-core.ts';
+import { defaultDeps, readAll, run, type GuardIo } from '../scripts/guard-core.ts';
 import type { Runner } from '../scripts/git.ts';
 import { logPath } from '../scripts/log.ts';
 import { cleanupTmp, tmpDir, writeTree } from '../../../scripts/test/helpers.ts';
 
 cleanupTmp();
+
+const runGuard = (setup: GuardIo) => run(setup.stdin, setup.env, setup);
 
 const runner: Runner = (args) => (args[0] === 'rev-parse' ? { status: 0, stdout: '/repo\n' } : { status: 128, stdout: '' });
 
@@ -208,5 +210,31 @@ describe('runGuard platform selection', () => {
     assert.equal(runGuard(win).code, 2);
     const posix = io({ command: 'rm -rf /repo/dist', platform: 'linux' });
     assert.equal(runGuard(posix).code, 0);
+  });
+});
+
+describe('process wiring', () => {
+  it('defaultDeps describes the real process', () => {
+    const deps = defaultDeps();
+    assert.equal(deps.platform, process.platform);
+    assert.equal(deps.fallbackCwd, process.cwd());
+    assert.equal(typeof deps.runner, 'function');
+    assert.equal(deps.realpath('.'), realpathSync('.'));
+    assert.ok(deps.now() instanceof Date);
+    assert.ok(deps.homedir.length > 0);
+  });
+
+  it('readAll joins string and buffer chunks', async () => {
+    async function* chunks() {
+      yield Buffer.from('{"a"');
+      yield ':1}';
+    }
+    assert.equal(await readAll(chunks()), '{"a":1}');
+  });
+
+  it('run takes stdin text and env directly', () => {
+    const home = tmpDir();
+    const result = run('{"tool_name":"Bash","tool_input":{"command":"git push -f origin main"},"cwd":"/repo"}', { H7_HOME: home }, io({ home }));
+    assert.equal(result.code, 2);
   });
 });

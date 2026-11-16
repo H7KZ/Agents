@@ -1,18 +1,24 @@
-import { createGit, type Runner } from './git.ts';
+import { realpathSync } from 'node:fs';
+import { homedir } from 'node:os';
+import { createGit, spawnRunner, type Runner } from './git.ts';
 import { appendDisabledOnce, appendLog, type LogEntry } from './log.ts';
 import { makePaths, type Realpath } from './paths.ts';
 import { pickDecision, scan } from './scan.ts';
 import type { Ctx, Decision } from './types.ts';
 
-export interface GuardIo {
-  stdin: string;
-  env: Record<string, string | undefined>;
+export interface Deps {
   platform: string;
   runner: Runner;
   realpath: Realpath;
   homedir: string;
   fallbackCwd: string;
   now: () => Date;
+}
+
+/** Everything the guard needs, as one object (used by tests that build whole inputs). */
+export interface GuardIo extends Deps {
+  stdin: string;
+  env: Record<string, string | undefined>;
 }
 
 export interface GuardResult {
@@ -45,8 +51,8 @@ function respond(decision: Decision, logError: string | null): GuardResult {
   return askResult(`h7 guard [${decision.rule}]: ${decision.reason}`, note);
 }
 
-export function runGuard(io: GuardIo): GuardResult {
-  const home = io.env.H7_HOME ?? io.homedir;
+export function run(stdinText: string, env: Record<string, string | undefined>, io: Deps): GuardResult {
+  const home = env.H7_HOME ?? io.homedir;
   const entry = (decision: LogEntry['decision'], rule: string, command: string, cwd: string): LogEntry => ({
     ts: io.now().toISOString(),
     decision,
@@ -57,11 +63,11 @@ export function runGuard(io: GuardIo): GuardResult {
   let cwd = io.fallbackCwd;
   let command = '';
   try {
-    if (io.env.H7_GUARD === 'off') {
+    if (env.H7_GUARD === 'off') {
       const logError = appendDisabledOnce(home, entry('disabled', 'h7-guard-off', '', cwd));
       return { ...ALLOW, stderr: logError === null ? '' : `h7 guard: could not write guard log: ${logError}\n` };
     }
-    const input = JSON.parse(io.stdin) as HookInput;
+    const input = JSON.parse(stdinText) as HookInput;
     const text = input.tool_input?.command;
     if ((input.tool_name !== 'Bash' && input.tool_name !== 'PowerShell') || typeof text !== 'string' || text.trim() === '') {
       return ALLOW;
@@ -77,4 +83,21 @@ export function runGuard(io: GuardIo): GuardResult {
     const logError = appendLog(home, { ...entry('error', 'internal-error', command, cwd), error: message });
     return askResult(`h7 guard internal error: ${message}`, logError === null ? '' : `h7 guard: could not write guard log: ${logError}`);
   }
+}
+
+export function defaultDeps(): Deps {
+  return {
+    platform: process.platform,
+    runner: spawnRunner,
+    realpath: realpathSync,
+    homedir: homedir(),
+    fallbackCwd: process.cwd(),
+    now: () => new Date(),
+  };
+}
+
+export async function readAll(stream: AsyncIterable<Buffer | string>): Promise<string> {
+  const chunks: Buffer[] = [];
+  for await (const chunk of stream) chunks.push(Buffer.from(chunk));
+  return Buffer.concat(chunks).toString('utf8');
 }
