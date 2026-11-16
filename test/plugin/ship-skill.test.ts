@@ -27,7 +27,7 @@ describe('ship skill', () => {
 
   it('has every PR body section and the safety rules', () => {
     for (const heading of ['## Why', '## What changed', '## Scope', '## Blast radius', '## Verification', '## Review', '## Decisions']) assert.ok(skill.includes(heading), heading);
-    for (const phrase of ['Never push', 'Never merge', 'Auto-merge', 'Conventional Commits', 'pr` or `push', 'READY', 'WAITING', 'BLOCKED', 'git add <explicit paths>', '--body-file', 'one rerun per head commit']) assert.ok(skill.includes(phrase), phrase);
+    for (const phrase of ['Never push', 'Never merge', 'Auto-merge', 'Conventional Commits', 'pr` or `push', 'READY', 'WAITING', 'BLOCKED', 'git add <explicit paths>', '--body-file', 'one rerun per workflow and job name per head commit', 'git show origin/<default>:docs/agents/verification.md', 'setup-files.ts" exclude .git/info/exclude', 'untrusted: true']) assert.ok(skill.includes(phrase), phrase);
   });
 
   it('covers every blocker kind the watcher can return', () => {
