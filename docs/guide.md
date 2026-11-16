@@ -101,7 +101,8 @@ The loop stops itself after **5 non-improving rounds** and reports instead of gr
 | Situation | Result |
 |---|---|
 | Force push to protected branch, delete it, `--no-verify` / `HUSKY=0`, `core.hooksPath` outside the repo | blocked |
-| `git reset --hard`, `checkout -- .`, `clean` on a dirty tree | blocked until you commit or stash |
+| `git reset --hard`, `checkout -- .`, `restore`, `clean` on a dirty tree | snapshot then allow; recover with `git restore --source=refs/h7/backup/<stamp> --worktree -- .` (last 20 kept; `clean -x` and failed snapshots stay blocked) |
+| Anything that would prompt, in an unattended `/h7:work` run (`--unattended` or `H7_UNATTENDED=1`) | denied at once, parked in the journal (`run-journal.ts park`), reported at the end; never weaker than your ask mode |
 | Commit with high-confidence secrets (`.env`, `id_rsa`, `*.key`, `.pem` with a private key) | blocked |
 | Recursive delete outside the repo, `rm -rf .git` | blocked |
 | Protected push, deploy or publish, history rewrite, unresolved targets, shell fed from a pipe, `xargs`, git aliases | asks |

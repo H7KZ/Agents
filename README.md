@@ -70,15 +70,19 @@ before `/h7:work`. Runner minutes: CI runs 3 cells; run `npm run mutation` local
 ## Always-on safety guard
 
 A `PreToolUse` hook for Bash and PowerShell. It blocks force pushes to protected branches, hook skipping
-(`--no-verify`, `HUSKY=0`), destructive git on a dirty tree, committing secrets and recursive deletes outside the
+(`--no-verify`, `HUSKY=0`), committing secrets and recursive deletes outside the
 repo; it asks before protected pushes and deploy/publish commands. Near-misses are logged (secrets redacted) to
 `~/.h7/guard.log`. Internal errors ask instead of allowing. `H7_GUARD=off` disables it.
 
 **Prompts follow your session.** In a `bypassPermissions` session the guard does not add its own prompts: things it
 would only ask about run (and are still logged); hard blocks (force push to protected branches, hook skipping,
-secret commits, deletes outside the repo, destructive git on a dirty tree) always block. In every other mode it asks.
+secret commits, deletes outside the repo) always block. In every other mode it asks.
 Override per machine with `H7_GUARD_ASK=prompt|allow|deny` or `{"ask": "..."}` in `~/.h7/guard.json` (your explicit
 choice always wins over the session mode).
+
+**Destructive git on a dirty tree is snapshotted, then allowed** (every mode). `reset --hard`, `checkout -- .`, `restore`, `clean` and friends first save tracked changes plus untracked non-ignored files as a commit on `refs/h7/backup/<UTC time>-<n>` (temporary index; your worktree and index are untouched; last 20 kept) and print the ref with `git restore --source=<ref> --worktree -- .`. If the snapshot fails, or `clean -x` would delete ignored files, the command stays blocked.
+
+**Unattended runs** (`/h7:work` started with `--unattended`, or `H7_UNATTENDED=1`): the guard turns would-be prompts into an immediate deny ("park it, journal it, continue with other work") so a run never stalls on a human. Stricter only: your explicit ask mode (`allow`/`deny`), bypass-derived allow and hard blocks are never changed, and a later `start` cannot drop the flag. Things that need a human are recorded with `run-journal.ts park` and reported at the end (PushNotification when available) with the resume command.
 
 It is a safety floor against agent accidents, not a sandbox: anything it cannot resolve statically asks
 (git failing or missing, piping into a shell, `xargs`, `iex`, variable command words or delete targets, git aliases,
