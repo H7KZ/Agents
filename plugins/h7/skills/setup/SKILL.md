@@ -48,7 +48,11 @@ Ship mode and auto-merge are asked once per repo; on update, keep the recorded a
 Run each candidate from `layers[].commands` and the install command. Pick, per layer, the command CI runs (match `ci.jobs[].commands`) over a local script when both exist.
 
 - Run non-mutating commands only (`mutates: false`). Use the format check, not the formatter.
-- Cap each command at about 5 minutes. A command that needs a service, secret or network you lack is `UNVERIFIED: <why>`.
+- Time-box every command (`timeout 300`, or the shell's equivalent); a command that hangs or exceeds it is `UNVERIFIED: did not finish in <n> s`. If dependencies are already installed and the install command hangs, mark it UNVERIFIED instead of waiting.
+- A cached result (turbo, nx) is not a run: rerun with the cache bypassed (`--force`) or record `verified (cache hit)`.
+- Format check failing on many files: run `git ls-files --eol`; `w/crlf` against `i/lf` is a Windows checkout artifact. Record it as FAILING with that note; do not reformat.
+- Interpreter names differ per OS (`python3` on Windows may be a Store stub that hangs): try `py` or `python`, and record the form that worked and the form CI uses.
+- Time-box applies to the slowest first: about 5 minutes at most. A command that needs a service, secret or network you lack is `UNVERIFIED: <why>`.
 - Record exit code and one line of output per command in `.h7/setup-log.md`.
 - Failing command: do not fix the repo. Record `FAILING: <first error line>` and report it.
 - Full local check = the commands CI runs on pull requests (`ci.triggers` with `pull_request`), minus deploy and secret-dependent jobs. If a repo script already wraps them (`kind: check`), prefer it.
@@ -77,7 +81,8 @@ node "${CLAUDE_PLUGIN_ROOT}/scripts/setup-files.ts" claude CLAUDE.md --write
 ```
 
 The first call only plans. Statuses: `created`, `appended`, `unchanged` are safe to write. `differs`: the block was changed since last run; show the diff between `existing` and your new block, ask before `--replace --write`. `oversize`: AGENTS.md would pass 150 lines; do not write, report the line count, and put the block in `docs/agents/h7.md` instead with one pointer line the user approves.
-3. Commit AGENTS.md and CLAUDE.md.
+3. If the repo has a formatter, run its check on the written files and let it fix only those files. If it rewrites the h7 block, copy the formatted block back into `.h7/agents-block.md` and plan again; the status must be `unchanged`, or the next run reports `differs`.
+4. Commit AGENTS.md and CLAUDE.md.
 
 ## 6. Verify skills
 
