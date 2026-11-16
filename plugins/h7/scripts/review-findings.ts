@@ -30,27 +30,52 @@ export interface Report {
   error: string | null;
 }
 
+export interface Absorbed {
+  lens: string;
+  title: string;
+  severity: Severity;
+}
+
 export interface Merged extends Omit<Finding, 'lens'> {
   id: string;
   lenses: string[];
+  /** Duplicates folded into this finding: nothing merges without a trace. */
+  merged: Absorbed[];
 }
+
+/** A lens that reports more than this is noise; the rest are dropped with a reason. */
+export const MAX_FINDINGS_PER_LENS = 10;
+/** Longest command output kept per finding; the rest is cut with a marker. */
+export const MAX_OUTPUT = 8192;
 
 const isObject = (value: unknown): value is Record<string, unknown> => typeof value === 'object' && value !== null && !Array.isArray(value);
 const text = (value: unknown): string => (typeof value === 'string' ? value.trim() : '');
 
-/** The last fenced block that parses to a report object, else the whole text as JSON. Null when neither does. Never throws. */
+const isReport = (value: unknown): value is Record<string, unknown> => isObject(value) && Array.isArray(value.findings);
+
+/**
+ * The report object, or null. Candidates start after each fence-opening line (```json) or at the start of the text, last first, and are
+ * tried at every later fence and at the end of the text, shortest first, so a fenced block inside a finding's output cannot cut the JSON short.
+ * Never throws.
+ */
 export function extractReport(body: string): Record<string, unknown> | null {
-  const blocks = [...body.matchAll(/```[ \t]*(?:json)?[ \t]*\r?\n([\s\S]*?)```/gi)].map((m) => m[1] as string).reverse();
-  for (const candidate of [...blocks, body]) {
-    try {
-      const parsed: unknown = JSON.parse(candidate);
-      if (isObject(parsed) && Array.isArray(parsed.findings)) return parsed;
-    } catch {
-      // not JSON: try the next candidate
+  const starts = [...body.matchAll(/^[ \t]*`{3,}[ \t]*(?:json)?[ \t]*\r?\n/gim)].map((m) => m.index + m[0].length).reverse();
+  for (const start of [...starts, 0]) {
+    const ends = [...body.slice(start).matchAll(/`{3,}/g)].map((m) => start + m.index);
+    for (const end of [...ends, body.length]) {
+      try {
+        const parsed: unknown = JSON.parse(body.slice(start, end));
+        if (isReport(parsed)) return parsed;
+      } catch {
+        // not a complete JSON document yet: try a longer candidate
+      }
     }
   }
   return null;
 }
+
+const clip = (output: string): string => (output.length > MAX_OUTPUT ? `${output.slice(0, MAX_OUTPUT)}
+[truncated ${output.length - MAX_OUTPUT} chars]` : output);
 
 /** Proof gate: a finding with no reproducing command or no captured output is dropped, whatever it claims. */
 export function parseReport(body: string, lensHint = 'unknown'): Report {
@@ -69,9 +94,13 @@ export function parseReport(body: string, lensHint = 'unknown'): Report {
       dropped.push({ lens, title, reason });
       continue;
     }
+    if (findings.length >= MAX_FINDINGS_PER_LENS) {
+      dropped.push({ lens, title, reason: `over the cap of ${MAX_FINDINGS_PER_LENS} findings per lens` });
+      continue;
+    }
     const severity = SEVERITIES.find((s) => s === text(entry.severity).toLowerCase()) ?? 'low';
     const line = typeof entry.line === 'number' && Number.isInteger(entry.line) && entry.line > 0 ? entry.line : null;
-    findings.push({ lens, title, severity, file: text(entry.file), line, claim: text(entry.claim), command, output });
+    findings.push({ lens, title, severity, file: text(entry.file), line, claim: text(entry.claim), command, output: clip(output) });
   }
   return { lens, findings, dropped, error: null };
 }
@@ -79,8 +108,11 @@ export function parseReport(body: string, lensHint = 'unknown'): Report {
 const norm = (value: string): string => value.toLowerCase().replace(/[^a-z0-9]+/g, ' ').trim();
 const rank = (severity: Severity): number => SEVERITIES.indexOf(severity);
 
-/** Keys under which two findings count as the same defect: the same command, or the same title at the same place. */
-const keysOf = (f: Finding): string[] => [`cmd:${f.command.replace(/\s+/g, ' ')}`, `loc:${f.file}:${f.line ?? ''}:${norm(f.title)}`];
+/** Keys under which two findings count as the same defect: same command at the same place, or same title at the same place. A shared command alone (`npm test`) never merges. */
+const keysOf = (f: Finding): string[] => {
+  const place = `${f.file}:${f.line ?? ''}`;
+  return [`cmd:${place}:${f.command.replace(/\s+/g, ' ')}`, `loc:${place}:${norm(f.title)}`];
+};
 
 /** Dedupe across reviewers (strongest severity wins, lenses accumulate), then rank: severity, agreeing lenses, file, line. Ids are F1.. in rank order. */
 export function mergeFindings(reports: Report[]): Merged[] {
@@ -92,11 +124,12 @@ export function mergeFindings(reports: Report[]): Merged[] {
     const hit = keys.map((key) => seen.get(key)).find((m) => m !== undefined);
     if (hit !== undefined) {
       if (!hit.lenses.includes(finding.lens)) hit.lenses.push(finding.lens);
+      hit.merged.push({ lens: finding.lens, title: finding.title, severity: finding.severity });
       for (const key of keys) seen.set(key, hit);
       continue;
     }
     const { lens, ...rest } = finding;
-    const merged = { ...rest, id: '', lenses: [lens] };
+    const merged: Merged = { ...rest, id: '', lenses: [lens], merged: [] };
     for (const key of keys) seen.set(key, merged);
     unique.push(merged);
   }

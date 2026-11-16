@@ -4,7 +4,7 @@ import { join } from 'node:path';
 import { describe, it } from 'node:test';
 import fc from 'fast-check';
 import { cleanupTmp, tmpDir, writeTree } from '../../scripts/test/helpers.ts';
-import { SEVERITIES, extractReport, main, mergeFindings, parseReport, realRead, summarize, type Merged } from '../../plugins/h7/scripts/review-findings.ts';
+import { MAX_FINDINGS_PER_LENS, MAX_OUTPUT, SEVERITIES, extractReport, main, mergeFindings, parseReport, realRead, summarize, type Merged } from '../../plugins/h7/scripts/review-findings.ts';
 
 cleanupTmp();
 
@@ -37,6 +37,44 @@ describe('extractReport', () => {
 
   it('never throws on any text', () => {
     fc.assert(fc.property(fc.string(), (body) => void extractReport(body)));
+  });
+});
+
+describe('regressions from review', () => {
+  it('keeps the report when a finding output contains a fenced block', () => {
+    const output = 'run:\n```sh\nnpm test\n```\nfailed';
+    const body = '```json\n' + JSON.stringify({ lens: 'spec', findings: [finding({ output })] }, null, 2) + '\n```\n';
+    const r = parseReport(body);
+    assert.equal(r.error, null);
+    assert.equal(r.findings[0]?.output, output);
+    const raw = '```json\n{"lens":"spec","findings":[{"title":"t","command":"c","output":"a```\\n b"}]}\n```';
+    assert.equal(parseReport(raw).findings.length, 1);
+  });
+
+  it('does not merge distinct findings that share a command', () => {
+    const merged = mergeFindings([parseReport(report('a', [finding({ command: 'npm test', line: 1, title: 'one' }), finding({ command: 'npm test', line: 2, title: 'two' }), finding({ command: 'npm test', file: 'other.ts', line: 1, title: 'three' })]))]);
+    assert.equal(merged.length, 3);
+  });
+
+  it('records every absorbed duplicate in a merged trace', () => {
+    const merged = mergeFindings([parseReport(report('a', [finding({ severity: 'high' })])), parseReport(report('b', [finding({ severity: 'low', title: 'Other words' })])), parseReport(report('c', [finding({ severity: 'medium', title: 'x' })]))]);
+    assert.equal(merged.length, 1);
+    assert.deepEqual(merged[0]?.merged, [
+      { lens: 'c', title: 'x', severity: 'medium' },
+      { lens: 'b', title: 'Other words', severity: 'low' },
+    ]);
+    assert.deepEqual(mergeFindings([parseReport(report('a', [finding()]))])[0]?.merged, []);
+  });
+
+  it('caps findings per lens and truncates oversized output with a marker', () => {
+    const many = Array.from({ length: MAX_FINDINGS_PER_LENS + 3 }, (_, i) => finding({ command: `c${i}`, title: `t${i}` }));
+    const r = parseReport(report('a', many));
+    assert.equal(r.findings.length, MAX_FINDINGS_PER_LENS);
+    assert.deepEqual(r.dropped.map((d) => d.reason), Array(3).fill(`over the cap of ${MAX_FINDINGS_PER_LENS} findings per lens`));
+    const big = parseReport(report('a', [finding({ output: 'x'.repeat(MAX_OUTPUT + 50) })])).findings[0]?.output as string;
+    assert.ok(big.startsWith('x'.repeat(MAX_OUTPUT)));
+    assert.ok(big.endsWith('[truncated 50 chars]'));
+    assert.equal(parseReport(report('a', [finding({ output: 'x'.repeat(MAX_OUTPUT) })])).findings[0]?.output, 'x'.repeat(MAX_OUTPUT));
   });
 });
 
@@ -130,13 +168,13 @@ describe('mergeFindings', () => {
     assert.deepEqual(mergeFindings([parse('a', [])]), []);
   });
 
-  it('property: ids are F1..Fn, commands are unique and severities sorted', () => {
+  it('property: ids are F1..Fn, place and command pairs are unique and severities sorted', () => {
     const item = fc.record({ title: fc.string({ minLength: 1 }), command: fc.constantFrom('a', 'b', 'c', 'd'), output: fc.constant('o'), severity: fc.constantFrom(...SEVERITIES), file: fc.constantFrom('x', 'y'), line: fc.integer({ min: 1, max: 3 }) });
     fc.assert(
       fc.property(fc.array(fc.array(item, { maxLength: 5 }), { maxLength: 4 }), (lists) => {
         const merged = mergeFindings(lists.map((items, i) => parse(`l${i}`, items)));
         assert.deepEqual(merged.map((m) => m.id), merged.map((_, i) => `F${i + 1}`));
-        assert.equal(new Set(merged.map((m) => m.command)).size, merged.length);
+        assert.equal(new Set(merged.map((m) => `${m.file}:${m.line}:${m.command}`)).size, merged.length);
         const order = merged.map((m) => SEVERITIES.indexOf(m.severity));
         assert.deepEqual(order, [...order].sort((a, b) => a - b));
       }),
