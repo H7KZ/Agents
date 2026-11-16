@@ -119,16 +119,27 @@ describe('lintSkill', () => {
 describe('lintAgent and lintPlugin', () => {
   it('requires name and description, recursively', () => {
     const dir = plugin({
-      'agents/ok.md': '---\nname: ok\ndescription: fine\n---\n',
+      'agents/ok.md': '---\nname: ok\ndescription: fine\ntools: Read, Grep\n---\n',
       'agents/sub/bad.md': '---\nname: bad\n---\n',
       'agents/nofm.md': 'text',
       'agents/readme.txt': 'ignored',
     });
     const problems = lintPlugin(dir).map(formatProblem).map((p) => p.replace(dir, '').replaceAll('\\', '/'));
-    assert.deepEqual(problems, ['/agents/nofm.md:1: frontmatter must start on line 1 with --- and be closed with ---', '/agents/sub/bad.md:1: description is required']);
+    assert.deepEqual(problems, ['/agents/nofm.md:1: frontmatter must start on line 1 with --- and be closed with ---', '/agents/sub/bad.md:1: description is required', '/agents/sub/bad.md:1: tools is required (omitting it grants every tool); list read-only tools']);
     assert.deepEqual(lintAgent(join(dir, 'agents', 'ok.md')), []);
-    const noName = plugin({ 'a.md': '---\ndescription: x\n---\n' });
+    const noName = plugin({ 'a.md': '---\ndescription: x\ntools: Read\n---\n' });
     assert.deepEqual(lintAgent(join(noName, 'a.md')).map((p) => p.message), ['name is required']);
+  });
+
+  it('requires read-only tools: no Write, Edit, MultiEdit or NotebookEdit, as list or inline', () => {
+    const dir = plugin({
+      'a.md': '---\nname: a\ndescription: d\ntools: Read, Write, Bash\n---\n',
+      'b.md': '---\nname: b\ndescription: d\ntools:\n  - Grep\n  - NotebookEdit\n  - Edit\n---\n',
+      'c.md': '---\nname: c\ndescription: d\ntools: Read, Grep, Glob, Bash, Editor\n---\n',
+    });
+    assert.deepEqual(lintAgent(join(dir, 'a.md')).map((p) => [p.line, p.message]), [[4, 'agents are read-only: remove Write from tools']]);
+    assert.deepEqual(lintAgent(join(dir, 'b.md')).map((p) => p.message), ['agents are read-only: remove Edit from tools', 'agents are read-only: remove NotebookEdit from tools']);
+    assert.deepEqual(lintAgent(join(dir, 'c.md')), []);
   });
 
   it('passes on a plugin with no skills or agents dirs', () => {

@@ -10,6 +10,7 @@ export interface Problem {
 
 const MAX_LINES = 500;
 const MAX_DESCRIPTION = 1024;
+const WRITE_TOOLS = ['Write', 'Edit', 'MultiEdit', 'NotebookEdit'];
 const FRONTMATTER_MESSAGE = 'frontmatter must start on line 1 with --- and be closed with ---';
 
 function isDir(path: string): boolean {
@@ -96,6 +97,14 @@ export function lintAgent(file: string): Problem[] {
     if ((fm.fields.get(key) ?? '') === '') {
       problems.push({ file, line: fm.lines.get(key) ?? 1, message: `${key} is required` });
     }
+  }
+  const tools = fm.fields.get('tools') ?? '';
+  const toolsLine = fm.lines.get('tools') ?? 1;
+  if (tools === '') {
+    problems.push({ file, line: toolsLine, message: 'tools is required (omitting it grants every tool); list read-only tools' });
+  }
+  for (const tool of WRITE_TOOLS.filter((name) => new RegExp(`\\b${name}\\b`).test(tools))) {
+    problems.push({ file, line: toolsLine, message: `agents are read-only: remove ${tool} from tools` });
   }
   return problems;
 }
