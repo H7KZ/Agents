@@ -21,7 +21,7 @@ scripts/                          repo tooling: lint-skills.ts, check-manifests.
 - `npm ci` install dev tooling (TypeScript 5.9, @types/node, fast-check, Stryker)
 - `npm run check` typecheck, skill lint, manifest check, all tests (fast, run before every commit)
 - `npm run test:coverage` tests with 100% line/branch/function gate
-- `npm run mutation` Stryker (tap-runner, perTest, incremental in reports/stryker-incremental.json), break 80; full run about 9 min, unchanged rerun about 15 s; spawning tests are skipped via H7_MUTATION=1
+- `npm run mutation` Stryker (tap-runner, perTest, incremental in reports/stryker-incremental.json), break 80; full run about 9 min locally, unchanged rerun about 15 s; CI is incremental from the cache saved on main (25 min cap, changed files only without a cache), full run weekly in mutation-full.yml; spawning tests are skipped via H7_MUTATION=1
 - `claude plugin validate ./plugins/h7` and `claude plugin validate .` (the "no version" warning is intended)
 
 ## Hard rules

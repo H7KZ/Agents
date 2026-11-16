@@ -1,0 +1,43 @@
+name: mutation-full
+
+on:
+  schedule:
+    - cron: '17 3 * * 0'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: mutation-full
+  cancel-in-progress: false
+
+jobs:
+  mutation:
+    name: full mutation (ubuntu, node 24.x)
+    runs-on: ubuntu-latest
+    timeout-minutes: 90
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: main
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24.x
+          cache: npm
+      - run: npm ci
+      # --force re-runs every mutant; the fresh report becomes the baseline for incremental CI runs on main and pull requests.
+      - name: Stryker full run (break threshold 80)
+        run: npm run mutation -- --force
+      - name: Save incremental baseline
+        if: always() && hashFiles('reports/stryker-incremental.json') != ''
+        uses: actions/cache/save@v4
+        with:
+          path: reports/stryker-incremental.json
+          key: stryker-refs/heads/main-full-${{ github.run_id }}
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: mutation-report-full
+          path: reports/mutation
+          if-no-files-found: ignore
