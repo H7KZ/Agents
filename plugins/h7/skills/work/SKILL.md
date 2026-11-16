@@ -1,6 +1,6 @@
 ---
 name: work
-description: Drive a task end to end - research, grill the user on the plan (only real decisions), implement failing-test-first in staged commits, verify, review, loop until the done predicate holds, then ship. Loads the phase skills by reading their files, keeps an append-only redacted run journal in .h7/runs, and stops after 5 non-improving rounds to report. Never relaxes the done predicate. Registers the verification Stop gate.
+description: Drive a task end to end - research, grill the user on the plan (only real decisions), implement failing-test-first in staged commits, verify, review, loop until the done predicate holds, then ship. Loads the phase skills by reading their files, keeps an append-only redacted run journal in .h7/runs, and stops after 5 non-improving rounds to report. Supports an unattended mode (pre-flight batch, park what needs a human, never idle-wait). Never relaxes the done predicate. Registers the verification Stop gate.
 disable-model-invocation: true
 hooks:
   Stop:
@@ -24,7 +24,8 @@ The Stop gate in the frontmatter blocks stopping while `.h7/verify.json` has a `
 4. Never push, merge or open a pull request unless `/h7:ship` rules allow it (the user asked for this run, or `docs/agents/verification.md` records the ship mode). Shipping is step 6 and follows `/h7:ship` literally.
 5. The journal is local state: `.h7/` is git-excluded and never committed, never staged, never quoted into a commit message, PR body or comment beyond what a phase skill asks for. Put no secrets in it; the script redacts, but do not rely on it.
 6. Never read `.env` files. Commits follow the repo convention, else Conventional Commits, with the attribution trailer the session instructs, `git add <explicit paths>` only. The safety guard applies to every call; when it asks, ask the user.
-7. Stop after 5 consecutive non-improving rounds (step 5, counted by `run-journal.ts progress`, not by you) and report. Do not start a sixth.
+7. Unattended runs (see Unattended mode) never wait on a human and never weaken anything: a block, deny or need is parked, not bypassed.
+8. Stop after 5 consecutive non-improving rounds (step 5, counted by `run-journal.ts progress`, not by you) and report. Do not start a sixth.
 
 ## 0. Start or resume
 
@@ -32,11 +33,11 @@ The Stop gate in the frontmatter blocks stopping while `.h7/verify.json` has a `
 2. Resume an unfinished run when the user says so or `.h7/runs/` holds one for this task; otherwise start a new one:
 
 ```
-node "${CLAUDE_PLUGIN_ROOT}/scripts/run-journal.ts" start --task "<one line task>"
+node "${CLAUDE_PLUGIN_ROOT}/scripts/run-journal.ts" start --task "<one line task>"        # add --unattended when the user will be away (step 2)
 node "${CLAUDE_PLUGIN_ROOT}/scripts/run-journal.ts" show
 ```
 
-`start` first adds `.h7/` to the repository's `info/exclude` (the path comes from `git rev-parse --git-path info/exclude`, so a linked worktree works) and writes nothing at all when it cannot, then creates `.h7/runs/<id>/journal.jsonl` and records the id in `.h7/runs/CURRENT`. Keep the `id` it prints and pass `--run <id>` on every later call: `CURRENT` is shared by every session in the repo, a second `start` replaces it, and with no `--run` and no `CURRENT` the script refuses to pick between several runs. `show` (with no `--run`, it reads CURRENT; take the id from its output when resuming) gives event counts per phase and the last events: continue from the phase the last event shows.
+`start` first adds `.h7/` to the repository's `info/exclude` (the path comes from `git rev-parse --git-path info/exclude`, so a linked worktree works) and writes nothing at all when it cannot, then creates `.h7/runs/<id>/journal.jsonl` and records the id in `.h7/runs/CURRENT`. Keep the `id` it prints and pass `--run <id>` on every later call: `CURRENT` is shared by every session in the repo, a second `start` replaces it, and with no `--run` and no `CURRENT` the script refuses to pick between several runs. `show` (with no `--run`, it reads CURRENT; take the id from its output when resuming) gives event counts per phase and the last events: continue from the phase the last event shows. A task text of `resume <id>` resumes that run with `--run <id>`; an unattended run stays unattended (a later `start` inherits the flag, and the guard reads it from the journal).
 
 ## Journal
 
@@ -55,6 +56,7 @@ Events the loop relies on. Only `loop` events are scored; the others are the rec
 | `verify` | `{"failing": <count of layers not pass or na>, "layers": ["unit: failing (...)"]}` from `verify-state.ts check` (its `incomplete` list) |
 | `review` | `{"unresolved": <proven findings not yet fixed>, "ids": ["F1"], "skipped": ["lens: reason"], "reviewer": "<model>", "independent": true}` |
 | `loop` | `{"round": <n>, "failing": <n>, "unresolved": <n>}`, closes a round; both counts are required |
+| `park` | `{"need": "what a human must provide or decide", "why": "what was blocked", "tried": "..."}` via `run-journal.ts park --run <id> '<json>'`; counted by `progress` as `parked`, listed by `show` |
 | `decision` | `{"question": "...", "choice": "...", "why": "...", "adr": "docs/adr/NNNN-x.md"}` (adr when one was written) |
 
 ## 1. Research
@@ -71,6 +73,10 @@ Interrogate the plan with the user before writing code. Use the `mattpocock-skil
 - Ask one AskUserQuestion batch of real decisions only, each with the alternatives, your recommendation and the cost of being wrong. Skip anything you can settle by reading code or running something. If a quick run or prototype would answer a question (does the API behave so? does this approach fit?), build it throwaway, run it, then ask with the result.
 - Propose formal verification (TLA+ or similar, decision 9 in `docs/design.md`) only when the change touches concurrency, ordering, multi-device state, a state machine or an invariant-heavy algorithm; the user decides.
 - A decision that is hard to reverse, surprising without context, and a real trade-off becomes an ADR in `docs/adr/` (committed in its own commit).
+
+### Pre-flight (before the user leaves)
+
+In the same grill batch, collect every decision or permission the run is likely to need, so nothing stalls later: tool or dependency installs, which commands may run (build, test, migrate, deploy), ship mode (push, PR, auto-merge), risky operations (history rewrites, deletes, dirty-tree git), external services and credentials the user must set up. Then ask `Will you be away? (attended/unattended)`. Unattended: run `start --unattended` and journal the answers; anything the user did not pre-approve is parked later, not asked.
 
 Journal each answer as `decision`, then `grill` with the agreed plan summary. If an answer changes the scope, restate the plan and get a yes before step 3. No open question may remain when implementation starts; a new one found later is asked then.
 
@@ -122,6 +128,15 @@ When the done predicate holds, journal `ship` `{"step": "start"}`, read `${CLAUD
 CI failures and review comments that need code re-enter the loop: fix in a new round (step 5, counted by the journal like any other), rerun the affected verify layers, then return to `/h7:ship` step 6. A blocker that is not yours to fix (`merge-gate`, an unauthenticated `gh`) is reported, not worked around. Journal `ship` with the verdict, the PR link and the last watcher result.
 
 Without permission to push (the user did not ask and no mode is recorded), stop after `/h7:ship` step 3 and report the branch, commits, check result, PR body and the exact commands you would run.
+
+## Unattended mode
+
+Only when the run started with `--unattended` (the guard then also denies, instead of asking, what would need a prompt; it can only get stricter, never weaker). Rules:
+
+1. Never idle-wait on a human: no AskUserQuestion, no waiting on a prompt. When a guard ask arrives as a deny, a hard block, a failing permission or a skill step that needs a human, record it: `run-journal.ts park --run <id> '{"need":"...","why":"..."}'`, then continue with independent work.
+2. Hard guard blocks are never retried, rephrased or bypassed. Journal the block, choose another approach that stays inside the rules, or park it.
+3. Nothing the user did not pre-approve in the pre-flight: no installs, no push, no merge, no deploy. Park it with the exact command.
+4. When nothing else can proceed (or at the end), send a PushNotification if that tool is available, summarising the parked items and the state (rounds, failing layers, branch, commits). Then stop cleanly with the report (step 7), listing `show`'s parked items and the exact resume command: `/h7:work resume <id>`.
 
 ## 7. Report
 

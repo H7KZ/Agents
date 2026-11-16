@@ -74,7 +74,7 @@ describe('run-journal start', () => {
     const io = fake();
     const r = run(io, ['start', '--task', 'Add login']);
     assert.equal(r.code, 0);
-    assert.deepEqual(JSON.parse(r.out[0] as string), { id: ID, dir: `.h7/runs/${ID}`, journal: `.h7/runs/${ID}/journal.jsonl`, exclude: EXCLUDE, excluded: true });
+    assert.deepEqual(JSON.parse(r.out[0] as string), { id: ID, dir: `.h7/runs/${ID}`, journal: `.h7/runs/${ID}/journal.jsonl`, exclude: EXCLUDE, excluded: true, unattended: false });
     assert.ok(io.dirs.has(p('.h7', 'runs', ID)));
     assert.match(io.files[journal()] as string, /"phase":"note".*"event":"start".*"task":"Add login"/);
     assert.equal(io.files[EXCLUDE], '.h7/\n');
@@ -99,7 +99,7 @@ describe('run-journal start', () => {
     const r = run(io, ['start']);
     assert.equal(r.code, 0);
     assert.equal(io.files[io.exclude], '.h7/\n');
-    assert.deepEqual(JSON.parse(r.out[0] as string), { id: '20261116-102030-run', dir: '.h7/runs/20261116-102030-run', journal: '.h7/runs/20261116-102030-run/journal.jsonl', exclude: io.exclude, excluded: true });
+    assert.deepEqual(JSON.parse(r.out[0] as string), { id: '20261116-102030-run', dir: '.h7/runs/20261116-102030-run', journal: '.h7/runs/20261116-102030-run/journal.jsonl', exclude: io.exclude, excluded: true, unattended: false });
   });
 
   it('writes nothing at all when git cannot say where the exclude file is', () => {
@@ -496,5 +496,78 @@ describe('run-journal on disk', () => {
     assert.equal(progress.status, 0);
     assert.equal(JSON.parse(progress.stdout).rounds[0].score, 3);
     assert.equal(runNode(script, ['bogus'], { cwd: dir }).status, 2);
+  });
+});
+
+describe('run-journal unattended and park', () => {
+  const UNATT = '20261116-102030-night';
+  const startUnattended = (io: Fake) => run(io, ['start', '--unattended', '--task', 'night']);
+
+  it('start --unattended records the flag in the start event and reports it', () => {
+    const io = fake();
+    const r = startUnattended(io);
+    assert.equal(r.code, 0);
+    assert.equal(JSON.parse(r.out[0] as string).unattended, true);
+    assert.match(io.files[journal(UNATT)] as string, /"event":"start".*"unattended":true/);
+    assert.equal(JSON.parse(run(io, ['show']).out[0] as string).unattended, true);
+  });
+
+  it('works in either argument order and does not swallow the task', () => {
+    const io = fake();
+    assert.equal(run(io, ['start', '--task', 'night', '--unattended']).code, 0);
+    assert.match(io.files[journal(UNATT)] as string, /"task":"night","unattended":true/);
+  });
+
+  it('a plain start records no flag', () => {
+    const io = fake();
+    run(io, ['start', '--task', 'day']);
+    assert.ok(!(io.files[journal('20261116-102030-day')] as string).includes('unattended'));
+  });
+
+  it('a later start never drops unattended from the run it replaces', () => {
+    const io = fake();
+    startUnattended(io);
+    const again = run(io, ['start', '--task', 'sneaky']);
+    assert.equal(JSON.parse(again.out[0] as string).unattended, true);
+    assert.match(io.files[journal('20261116-102030-sneaky')] as string, /"unattended":true/);
+  });
+
+  it('a later start stays attended when the current run is attended, missing or unreadable', () => {
+    const io = fake({ files: { [CURRENT]: 'bad/id\n' } });
+    assert.equal(JSON.parse(run(io, ['start', '--task', 'a']).out[0] as string).unattended, false);
+    const gone = fake({ files: { [CURRENT]: 'ghost\n' } });
+    assert.equal(JSON.parse(run(gone, ['start', '--task', 'a']).out[0] as string).unattended, false);
+    const corrupt = fake({ files: { [CURRENT]: 'r1\n', [journal('r1')]: '{"unattended":tru' } });
+    assert.equal(JSON.parse(run(corrupt, ['start', '--task', 'a']).out[0] as string).unattended, false);
+  });
+
+  it('park appends a park event, append park is the same, and show and progress list and count them', () => {
+    const io = fake();
+    startUnattended(io);
+    assert.equal(run(io, ['park', '{"need":"npm install","why":"missing dep"}']).code, 0);
+    assert.equal(run(io, ['append', 'park', '{"need":"deploy ok?"}']).code, 0);
+    assert.equal(run(io, ['park', '--run', UNATT, '-'], '{"need":"stdin"}').code, 0);
+    const shown = JSON.parse(run(io, ['show']).out[0] as string);
+    assert.equal(shown.phases.park, 3);
+    assert.deepEqual(shown.parked.map((p: { need: string }) => p.need), ['npm install', 'deploy ok?', 'stdin']);
+    assert.equal(shown.parked[0].ts, NOW.toISOString());
+    assert.equal(JSON.parse(run(io, ['progress']).out[0] as string).parked, 3);
+  });
+
+  it('park needs JSON and a run', () => {
+    const io = fake();
+    startUnattended(io);
+    assert.equal(run(io, ['park']).code, 2);
+    assert.equal(run(io, ['park', '{bad']).code, 2);
+    assert.equal(run(fake(), ['park', '{}']).code, 2);
+  });
+
+  it('park items never count as loop rounds', () => {
+    const io = fake();
+    startUnattended(io);
+    run(io, ['park', '{"need":"x"}']);
+    const progress = JSON.parse(run(io, ['progress']).out[0] as string);
+    assert.deepEqual(progress.rounds, []);
+    assert.equal(progress.stop, false);
   });
 });

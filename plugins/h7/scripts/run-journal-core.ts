@@ -1,6 +1,6 @@
 import { redact } from './log.ts';
 
-export const PHASES = ['research', 'grill', 'implement', 'verify', 'review', 'loop', 'ship', 'decision', 'note'] as const;
+export const PHASES = ['research', 'grill', 'implement', 'verify', 'review', 'loop', 'ship', 'decision', 'note', 'park'] as const;
 export type Phase = (typeof PHASES)[number];
 
 /** Consecutive non-improving rounds after which the run stops and reports. */
@@ -9,6 +9,7 @@ export const STALL_LIMIT = 5;
 export const MAX_STRING = 4000;
 /** Longest serialized event line; a bigger one is replaced by a truncated preview so one append stays one small write. */
 export const MAX_LINE = 32768;
+export const MAX_PARKED = 50;
 const MAX_ITEMS = 200;
 const MAX_DEPTH = 8;
 const PREVIEW = 2000;
@@ -159,6 +160,8 @@ export const NO_OBSERVED: Observed = { failing: null, unresolved: null, unreadab
 
 export interface Progress {
   rounds: Round[];
+  /** Items recorded with `park`: things that need a human, left for the end of an unattended run. */
+  parked: number;
   /** Trailing rounds that did not improve. */
   streak: number;
   /** Effective limit: a larger request is capped at STALL_LIMIT, a smaller one lowers it. */
@@ -189,10 +192,14 @@ export function progressOf(events: JournalEvent[], limit = STALL_LIMIT, observed
   else if (zero && !clean) reason = 'reported counts are zero but the files on disk disagree: not clean';
   else if (clean) reason = 'last round is clean: check the rest of the done predicate';
   else reason = `${streak} of ${cap} non-improving rounds`;
-  return { rounds, streak, limit: cap, stop, clean, reason, warnings, observed };
+  return { rounds, parked: events.filter((event) => event.phase === 'park').length, streak, limit: cap, stop, clean, reason, warnings, observed };
 }
 
 export interface Summary {
+  /** The run was started with --unattended. */
+  unattended: boolean;
+  /** Parked items (newest last, at most MAX_PARKED), each with its timestamp. */
+  parked: Record<string, unknown>[];
   events: number;
   corrupt: number;
   phases: Record<string, number>;
@@ -202,7 +209,10 @@ export interface Summary {
 export function summarize(events: JournalEvent[], corrupt: number, tail: number): Summary {
   const phases: Record<string, number> = {};
   for (const event of events) phases[event.phase] = (phases[event.phase] ?? 0) + 1;
-  return { events: events.length, corrupt, phases, last: events.slice(Math.max(0, events.length - tail)) };
+  const parked = events.filter((event) => event.phase === 'park').slice(-MAX_PARKED).map((event) => ({ ts: event.ts, ...event.data }));
+  const first = events[0];
+  const unattended = first !== undefined && startIsUnattended(JSON.stringify(first));
+  return { unattended, parked, events: events.length, corrupt, phases, last: events.slice(Math.max(0, events.length - tail)) };
 }
 
 /** `YYYYMMDD-HHMMSS-<slug>` from the clock and the task text. */
@@ -210,4 +220,14 @@ export function makeRunId(now: Date, task: string): string {
   const digits = now.toISOString().slice(0, 19).replace(/\D/g, '');
   const slug = task.toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-+|-+$/g, '').slice(0, 40).replace(/-+$/, '');
   return `${digits.slice(0, 8)}-${digits.slice(8)}-${slug === '' ? 'run' : slug}`;
+}
+
+/** True when a journal's first line is a start event recorded with unattended: true. Never throws; anything else (corrupt, other shape) is false. */
+export function startIsUnattended(firstLine: string): boolean {
+  try {
+    const raw = JSON.parse(firstLine) as { phase?: unknown; data?: { event?: unknown; unattended?: unknown } | null } | null;
+    return raw?.phase === 'note' && raw.data?.event === 'start' && raw.data.unattended === true;
+  } catch {
+    return false;
+  }
 }

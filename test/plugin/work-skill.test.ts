@@ -53,4 +53,11 @@ describe('work skill', () => {
   it('keeps the run id, explains the brake as the script computes it, and the PowerShell form', () => {
     for (const phrase of ['--run <id>', 'CURRENT', 'best score', 'never raise it above 5', 'warnings[]', 'observed', 'both counts are required', 'info/exclude', '${CLAUDE_PLUGIN_ROOT}/scripts/run-journal.ts" append --run <id> <phase> -']) assert.ok(skill.includes(phrase), phrase);
   });
+
+  it('has a pre-flight batch and an unattended mode that parks, never bypasses and resumes', () => {
+    for (const phrase of ['Pre-flight', 'Will you be away? (attended/unattended)', 'start --unattended', '## Unattended mode', 'run-journal.ts park --run <id>', 'PushNotification', '/h7:work resume <id>', 'never retried, rephrased or bypassed', 'Never idle-wait on a human']) {
+      assert.ok(skill.includes(phrase), phrase);
+    }
+    assert.ok(skill.indexOf('Pre-flight') > skill.indexOf('## 2. Grill') && skill.indexOf('Pre-flight') < skill.indexOf('## 3. Implement'));
+  });
 });

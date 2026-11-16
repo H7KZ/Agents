@@ -19,6 +19,8 @@ import {
   redactValue,
   roundScores,
   serializeEvent,
+  startIsUnattended,
+  MAX_PARKED,
   summarize,
   type JournalEvent,
   type Phase,
@@ -380,7 +382,44 @@ describe('progress', () => {
 describe('summary', () => {
   it('counts phases and keeps the tail', () => {
     const events = [ev('research'), ev('verify'), ev('verify'), ev('loop')];
-    assert.deepEqual(summarize(events, 2, 2), { events: 4, corrupt: 2, phases: { research: 1, verify: 2, loop: 1 }, last: events.slice(2) });
+    assert.deepEqual(summarize(events, 2, 2), { unattended: false, parked: [], events: 4, corrupt: 2, phases: { research: 1, verify: 2, loop: 1 }, last: events.slice(2) });
     assert.equal(summarize(events, 0, 50).last.length, 4);
+  });
+});
+
+describe('unattended and park helpers', () => {
+  it('startIsUnattended is true only for a start note with unattended exactly true', () => {
+    const line = (phase: string, data: unknown) => JSON.stringify({ ts: NOW.toISOString(), phase, data });
+    assert.equal(startIsUnattended(line('note', { event: 'start', unattended: true })), true);
+    for (const bad of [
+      line('note', { event: 'start' }),
+      line('note', { event: 'start', unattended: 'true' }),
+      line('note', { event: 'start', unattended: 1 }),
+      line('note', { event: 'other', unattended: true }),
+      line('loop', { event: 'start', unattended: true }),
+      line('note', null),
+      line('note', 'x'),
+      'null',
+      '[]',
+      '{',
+      '',
+    ]) assert.equal(startIsUnattended(bad), false, bad);
+  });
+
+  it('summarize flags an unattended first event and lists parked items, capped at MAX_PARKED', () => {
+    const start = ev('note', { event: 'start', unattended: true });
+    const parked = Array.from({ length: MAX_PARKED + 3 }, (_, i) => ev('park', { need: `n${i}` }));
+    const s = summarize([start, ...parked], 0, 1);
+    assert.equal(s.unattended, true);
+    assert.equal(s.parked.length, MAX_PARKED);
+    assert.equal(s.parked[MAX_PARKED - 1]?.need, `n${MAX_PARKED + 2}`);
+    assert.equal(summarize([ev('note', { event: 'start' })], 0, 1).unattended, false);
+    assert.equal(summarize([], 0, 1).unattended, false);
+  });
+
+  it('progressOf counts parked items and park is a journal phase', () => {
+    assert.equal(progressOf([ev('park', {}), loop(1, 0), ev('park', {})]).parked, 2);
+    assert.equal(progressOf([]).parked, 0);
+    assert.ok(isPhase('park'));
   });
 });

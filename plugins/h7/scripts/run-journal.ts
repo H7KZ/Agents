@@ -1,7 +1,7 @@
 import { closeSync, fstatSync, mkdirSync, openSync, readFileSync, readSync, readdirSync, lstatSync, writeSync } from 'node:fs';
 import { dirname, join, resolve } from 'node:path';
 import { spawnRunner } from './git.ts';
-import { countProblem, isPhase, isRunId, makeEvent, makeRunId, parseJournal, progressOf, provenCount, serializeEvent, STALL_LIMIT, summarize, type Observed } from './run-journal-core.ts';
+import { countProblem, startIsUnattended, isPhase, isRunId, makeEvent, makeRunId, parseJournal, progressOf, provenCount, serializeEvent, STALL_LIMIT, summarize, type Observed } from './run-journal-core.ts';
 import { ensureExclude, pathProblem, writeAtomic } from './setup-files.ts';
 import { incomplete, parseState, STATE_FILE } from './verify-state.ts';
 
@@ -92,8 +92,9 @@ export interface Env {
 }
 
 const USAGE = [
-  'usage: run-journal.ts start [--task <text>]',
+  'usage: run-journal.ts start [--task <text>] [--unattended]',
   '       run-journal.ts append [--run <id>] <phase> <json | ->',
+  '       run-journal.ts park [--run <id>] <json | ->',
   '       run-journal.ts progress [--run <id>] [--limit <n>]',
   '       run-journal.ts show [--run <id>] [--tail <n>]',
 ].join('\n');
@@ -168,8 +169,17 @@ function pickRun(root: string, requested: string | undefined, io: JournalIo): st
   return id;
 }
 
+/** Whether the run CURRENT points to was started unattended; false when there is none or anything about it is unreadable. */
+function currentIsUnattended(root: string, io: JournalIo): boolean {
+  const id = (io.read(join(root, RUNS_DIR, CURRENT)) ?? '').trim();
+  if (!isRunId(id)) return false;
+  const first = (io.read(join(root, RUNS_DIR, id, JOURNAL)) ?? '').split('\n', 1)[0] ?? '';
+  return startIsUnattended(first);
+}
+
 function start(root: string, args: string[], env: Env): void {
-  const { values } = flags(args, ['--task']);
+  const requested = args.includes('--unattended');
+  const { values } = flags(args.filter((arg) => arg !== '--unattended'), ['--task']);
   const { io } = env;
   checkLinks(root, ['.h7', 'runs', CURRENT], io);
   const exclude = io.excludePath(root);
@@ -180,13 +190,15 @@ function start(root: string, args: string[], env: Env): void {
   if (problem !== null) throw new Failure(`${problem}; nothing written`);
   const excluded = ensureExclude(io.read(exclude));
   if (excluded.status !== 'unchanged') io.write(exclude, excluded.text, gitDir);
+  // A new run never drops unattended from the run it replaces: an agent cannot weaken the guard by starting over.
+  const unattended = requested || currentIsUnattended(root, io);
   const base = makeRunId(io.now(), values['--task'] ?? '');
   let id = base;
   for (let n = 2; io.lstat(join(root, RUNS_DIR, id)) !== null; n += 1) id = `${base}-${n}`;
   io.mkdir(join(root, RUNS_DIR, id));
-  io.append(join(root, RUNS_DIR, id, JOURNAL), serializeEvent(makeEvent('note', { event: 'start', task: values['--task'] ?? '' }, io.now())));
+  io.append(join(root, RUNS_DIR, id, JOURNAL), serializeEvent(makeEvent('note', { event: 'start', task: values['--task'] ?? '', ...(unattended ? { unattended: true } : {}) }, io.now())));
   io.write(current, `${id}\n`, root);
-  env.out(JSON.stringify({ id, dir: `${RUNS_DIR}/${id}`, journal: `${RUNS_DIR}/${id}/${JOURNAL}`, exclude, excluded: true }));
+  env.out(JSON.stringify({ id, dir: `${RUNS_DIR}/${id}`, journal: `${RUNS_DIR}/${id}/${JOURNAL}`, exclude, excluded: true, unattended }));
 }
 
 function append(root: string, args: string[], env: Env): void {
@@ -234,11 +246,12 @@ function load(root: string, id: string, io: JournalIo): ReturnType<typeof parseJ
 export function main(argv: string[], env: Env): number {
   const [cmd, ...args] = argv;
   try {
-    if (cmd !== 'start' && cmd !== 'append' && cmd !== 'progress' && cmd !== 'show') throw new Failure(USAGE);
+    if (cmd !== 'start' && cmd !== 'append' && cmd !== 'park' && cmd !== 'progress' && cmd !== 'show') throw new Failure(USAGE);
     const root = findRoot(env.cwd, env.io);
     if (root === null) throw new Failure('not inside a git repository');
     if (cmd === 'start') start(root, args, env);
     else if (cmd === 'append') append(root, args, env);
+    else if (cmd === 'park') append(root, ['park', ...args], env);
     else if (cmd === 'progress') {
       const { values } = flags(args, ['--run', '--limit']);
       const id = pickRun(root, values['--run'], env.io);
