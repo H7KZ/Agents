@@ -81,16 +81,11 @@ export function run(stdinText: string, env: Record<string, string | undefined>, 
     const platform = io.platform === 'win32' ? 'win32' : 'posix';
     const paths = makePaths(platform, io.realpath);
     const disk = io.disk ?? realDisk;
-    const vars: Record<string, string> = {};
-    for (const name of ['TMPDIR', 'TEMP', 'TMP']) {
-      const value = env[name];
-      if (value !== undefined && value !== '') vars[name] = value;
-    }
     const posixTemp = platform === 'posix' ? ['/tmp', '/var/tmp'] : [];
-    const candidates = [...new Set([io.tmpdir, ...posixTemp, ...Object.values(vars)].map((dir) => paths.resolve(cwd, dir)))];
+    const candidates = [...new Set([io.tmpdir, ...posixTemp].map((dir) => paths.resolve(cwd, dir)))];
     // A temp dir that contains the working directory or the home directory must not whitelist them.
     const dirs = candidates.filter((dir) => !paths.isInside(dir, cwd) && !paths.isInside(dir, paths.resolve(cwd, home)));
-    const ctx: Ctx = { cwd, home, paths, git: createGit(io.runner, disk), disk, tmp: { dirs, vars } };
+    const ctx: Ctx = { cwd, home, paths, git: createGit(io.runner, disk), disk, tmp: { dirs } };
     const decision = pickDecision(scan(command, input.tool_name === 'PowerShell' ? 'ps' : 'sh', ctx, newState(cwd)));
     if (decision === null) return ALLOW;
     return respond(decision, appendLog(home, entry(decision.decision, decision.rule, command, cwd)));

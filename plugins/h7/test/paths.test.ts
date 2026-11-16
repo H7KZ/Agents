@@ -69,11 +69,8 @@ describe('paths.expand', () => {
     assert.equal(posix.expand('~', home), '/home/me');
     assert.equal(posix.expand('~/x', home), '/home/me/x');
     assert.equal(posix.expand('~\\x', home), '/home/me\\x');
-    assert.equal(posix.expand('$HOME/x', home), '/home/me/x');
-    assert.equal(posix.expand('${HOME}/x', home), '/home/me/x');
-    assert.equal(posix.expand('$env:USERPROFILE\\x', home), '/home/me\\x');
-    assert.equal(posix.expand('${env:HOME}', home), '/home/me');
-    assert.equal(win.expand('%USERPROFILE%\\x', 'C:\\Users\\me'), 'C:\\Users\\me\\x');
+    for (const word of ['$HOME/x', '${HOME}/x', '$env:USERPROFILE\\x', '${env:HOME}']) assert.equal(posix.expand(word, home), null, word);
+    assert.equal(win.expand('%USERPROFILE%\\x', 'C:\\Users\\me'), null);
   });
 
   it('returns null for unresolvable variables, substitutions and other users', () => {

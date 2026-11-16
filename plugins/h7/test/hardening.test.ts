@@ -106,10 +106,10 @@ describe('indirection asks', () => {
     ]);
     table({}, [
       ['bash script.sh', null],
-      ['echo x | bash script.sh', null],
+      ['echo x | bash script.sh', INDIRECT],
       ['bash -c "ls"', null],
-      ['echo x | node -e "1"', null],
-      ['sh script.sh < input.txt', null],
+      ['echo x | node -e "1"', INDIRECT],
+      ['sh script.sh < input.txt', INDIRECT],
       ['echo hi | grep h', null],
       ['cat <<EOF\nhi\nEOF', null],
     ]);
@@ -482,7 +482,7 @@ describe('PowerShell delete targets', () => {
       ['Get-ChildItem C:\\x | Remove-Item -Recurse -Force', RM_ASK],
       ['gci x -Recurse | ri -Force', RM_ASK],
       ['Remove-Item -Recurse -Force $target', RM_ASK],
-      ['Remove-Item -Recurse -Force "$env:USERPROFILE\\x"', RM],
+      ['Remove-Item -Recurse -Force "$env:USERPROFILE\\x"', RM_ASK],
       ['Remove-Item -Recurse -Force', RM_ASK],
     ]);
   });
@@ -700,13 +700,13 @@ describe('publish and deploy', () => {
     ]);
   });
 
-  it('--dry-run and help are allowed', () => {
+  it('help is allowed and --dry-run still asks', () => {
     table({}, [
-      ['npm publish --dry-run', null],
+      ['npm publish --dry-run', DEPLOY],
       ['npm help publish', null],
-      ['cargo publish --dry-run', null],
-      ['kubectl apply -f prod.yaml --dry-run=client', null],
-      ['pnpm run deploy --dry-run', null],
+      ['cargo publish --dry-run', DEPLOY],
+      ['kubectl apply -f prod.yaml --dry-run=client', DEPLOY],
+      ['pnpm run deploy --dry-run', DEPLOY],
     ]);
   });
 });
@@ -786,28 +786,23 @@ describe('false positives', () => {
     table({}, [['rm -rf /tmp/foo', RM]]);
   });
 
-  it('temp variables expand only when they are literally set', () => {
-    table({ tmpDirs: ['/tmp'], tmpVars: { TMPDIR: '/tmp' } }, [
-      ['rm -rf $TMPDIR/foo', null],
-      ['rm -rf "${TMPDIR}/foo"', null],
-      ['rm -rf $TMPDIR', RM],
-      ['rm -rf $OTHER/foo', RM_ASK],
-      ['rm -rf $TMPDIRX/foo', RM_ASK],
+  it('any variable reference in a delete target asks, even a temp variable', () => {
+    table({ tmpDirs: ['/tmp'] }, [
+      ['rm -rf $TMPDIR/foo', RM_ASK],
+      ['rm -rf "${TMPDIR}/foo"', RM_ASK],
+      ['rm -rf $TMPDIR', RM_ASK],
+      ['rm -rf $HOME', RM_ASK],
+      ['rm -rf "${HOME}/x"', RM_ASK],
+      ['rm -rf ~other/x', RM_ASK],
+      ['rm -rf /tmp/foo', null],
     ]);
-    table({ tmpDirs: ['/tmp'] }, [['rm -rf $TMPDIR/foo', RM_ASK]]);
-    table(
-      { dialect: 'ps', platform: 'win32', tmpDirs: ['C:\\Users\\me\\AppData\\Local\\Temp'], tmpVars: { TEMP: 'C:\\Users\\me\\AppData\\Local\\Temp' } },
-      [
-        ['Remove-Item -Recurse -Force $env:TEMP\\foo', null],
-        ['Remove-Item -Recurse -Force %TEMP%\\foo', null],
-        ['Remove-Item -Recurse -Force $env:TMP\\foo', RM_ASK],
-        ['Remove-Item -Recurse -Force C:\\Users\\me\\AppData\\Local\\Temp', RM],
-      ],
-    );
-    assert.equal(
-      ruleOf('Remove-Item -Recurse -Force $env:temp\\foo', { dialect: 'ps', platform: 'win32', tmpDirs: ['C:\\T'], tmpVars: { TEMP: 'C:\\T' } }),
-      null,
-    );
+    table({ dialect: 'ps', platform: 'win32', tmpDirs: ['C:\\Users\\me\\AppData\\Local\\Temp'] }, [
+      ['Remove-Item -Recurse -Force $env:TEMP\\foo', RM_ASK],
+      ['Remove-Item -Recurse -Force %TEMP%\\foo', RM_ASK],
+      ['Remove-Item -Recurse -Force $env:USERPROFILE', RM_ASK],
+      ['Remove-Item -Recurse -Force C:\\Users\\me\\AppData\\Local\\Temp\\foo', null],
+      ['Remove-Item -Recurse -Force C:\\Users\\me\\AppData\\Local\\Temp', RM],
+    ]);
   });
 
   it('rm -rf * at the repository root asks instead of blocking, but other broad globs still block', () => {

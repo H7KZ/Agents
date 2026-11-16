@@ -84,7 +84,7 @@ function parseGlobals(argv: string[], cwd: string, ctx: Ctx): Globals {
   let gitDir: string | undefined;
   let workTree: string | undefined;
   const dirArg = (value: string): string | null => {
-    const expanded = ctx.paths.expand(value, ctx.home, ctx.tmp.vars);
+    const expanded = ctx.paths.expand(value, ctx.home);
     if (expanded === null) out.unresolved = true;
     return expanded;
   };
@@ -218,7 +218,7 @@ function hooksPathValues(call: GitCall): (string | undefined)[] {
 function hooksPath(call: GitCall, ctx: Ctx): Decision | null {
   let pending: Decision | null = null;
   for (const value of hooksPathValues(call)) {
-    const expanded = value === undefined || value === '' ? null : ctx.paths.expand(value, ctx.home, ctx.tmp.vars);
+    const expanded = value === undefined || value === '' ? null : ctx.paths.expand(value, ctx.home);
     if (expanded === null) {
       pending ??= ask('skip-git-hooks', `core.hooksPath is set to a value the guard cannot resolve ("${value ?? ''}"). ${HOOKS_ADVICE}`);
       continue;
@@ -427,7 +427,7 @@ function globToRegExp(glob: string): RegExp {
 /** Turns a user pathspec into a repository-root-relative one; null when it cannot match inside the repository. */
 function rootRelative(spec: string, root: string, call: GitCall, ctx: Ctx): string | null {
   if (spec.startsWith(':/')) return spec.slice(2).replace(/^\/+/, '');
-  const expanded = ctx.paths.expand(spec, ctx.home, ctx.tmp.vars) ?? spec;
+  const expanded = ctx.paths.expand(spec, ctx.home) ?? spec;
   return ctx.paths.relative(root, ctx.paths.resolve(call.cwd, expanded));
 }
 

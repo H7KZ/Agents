@@ -46,7 +46,6 @@ export interface Options extends FakeGitState {
   /** Paths that exist on the fake disk, mapped to their text (use '' for plain files). */
   files?: Record<string, string>;
   tmpDirs?: string[];
-  tmpVars?: Record<string, string>;
   state?: Partial<ScanState>;
 }
 
@@ -69,7 +68,7 @@ export function makeCtx(options: Options = {}): Ctx {
     paths: makePaths(platform, (p) => p),
     git: fakeGit({ root: options.root === undefined ? (win ? 'C:/work/repo' : '/repo') : options.root, ...options }, options.calls),
     disk: fakeDisk(options.files),
-    tmp: { dirs: options.tmpDirs ?? [], vars: options.tmpVars ?? {} },
+    tmp: { dirs: options.tmpDirs ?? [] },
   };
 }
 
