@@ -186,9 +186,6 @@ const auto = (reason: string): Rerun => ({ status: 'auto', reason });
 const needs = (reason: string): Rerun => ({ status: 'needs-approval', reason });
 
 const META = /[;&|<>`$\n\r\\(){}]/;
-const GIT_SUBS = new Set(['diff', 'show', 'log', 'grep', 'blame', 'ls-files', 'cat-file', 'rev-parse', 'status']);
-const GIT_BAD = /^(?:-c(?:=|$)|--output|--exec|--ext-diff|--textconv|--open-files-in-pager|--upload-pack|--receive-pack|--config|-O)/;
-const RG_BAD = /^(?:--pre|--hostname-bin|--search-zip|-[A-Za-z]*z)/;
 const squash = (command: string): string => command.trim().replace(/\s+/g, ' ');
 
 /** Words of a simple command line; quotes group, nothing expands. Null on an unbalanced quote. */
@@ -218,14 +215,56 @@ function words(command: string): string[] | null {
   return out;
 }
 
-/** Absolute, drive, home-relative, or containing a ".." segment: a path that can leave the repo. */
-const leavesRepo = (value: string): boolean => /^(?:[A-Za-z]:|\/|~)/.test(value) || value.split('/').includes('..');
+interface Spec {
+  /** Letters allowed as single or bundled short options (-n, -rn). Every letter must be safe on its own. */
+  letters: string;
+  /** Exact long options. */
+  long: string[];
+  /** Whether \`-e <pattern>\` is allowed (the pattern may then contain spaces). */
+  pattern: boolean;
+}
+
+const spec = (letters: string, long: string[] = [], pattern = false): Spec => ({ letters, long, pattern });
+
+const VIEW_LONG = ['--stat', '--name-only', '--name-status', '--no-color', '--no-ext-diff', '--no-textconv', '--oneline', '--cached', '--staged', '--shortstat', '--numstat', '--summary', '--patch', '--no-patch', '--no-merges', '--first-parent', '--reverse', '--graph', '--abbrev-commit'];
+
+/** Exact, known-safe options per program or git subcommand. Anything else (abbreviations, attached values, unknown letters) needs approval. */
+const SPECS: Record<string, Spec> = {
+  'git diff': spec('nps', VIEW_LONG),
+  'git show': spec('nps', VIEW_LONG),
+  'git log': spec('nps', VIEW_LONG),
+  'git grep': spec('niwFEIl', ['--no-color', '--line-number', '--ignore-case', '--word-regexp', '--fixed-strings', '--files-with-matches'], true),
+  'git blame': spec('w', ['--porcelain']),
+  'git ls-files': spec('', ['--cached', '--others', '--exclude-standard', '--deleted', '--modified']),
+  'git cat-file': spec('pts'),
+  'git rev-parse': spec('', ['--short', '--abbrev-ref', '--verify', '--show-toplevel', '--is-inside-work-tree']),
+  'git status': spec('sb', ['--short', '--branch', '--porcelain']),
+  grep: spec('niwFErl', ['--color=never'], true),
+  rg: spec('niwFl', ['--no-heading', '--no-color', '--fixed-strings', '--line-number', '--ignore-case', '--word-regexp', '--files-with-matches'], true),
+};
+
+/** Value-carrying options that are safe only with a number or a plain word attached. */
+const NUMERIC = /^(?:--unified=\d+|-U\d+|-n\d+|--max-count=\d+)$/;
+const FORMAT = /^--(?:format|pretty)=[\w%:-]+$/;
+/** A revision or repo-relative path: no glob characters, no leading dash, slash or tilde, no spaces. */
+const PLAIN = /^[A-Za-z0-9_.][A-Za-z0-9_.\/@:^~+,-]*$/;
+/** The pattern after -e: plain text, no glob or regex-class characters, no leading dash. */
+const PATTERN = /^[A-Za-z0-9_][A-Za-z0-9_ .:,@%^+=\/-]*$/;
+
+const plainPath = (token: string): boolean => PLAIN.test(token) && !/^[A-Za-z]:/.test(token) && !token.split('/').includes('..');
+
+function optionAllowed(arg: string, allowed: Spec, git: boolean): boolean {
+  if (allowed.long.includes(arg)) return true;
+  if (git && (NUMERIC.test(arg) || FORMAT.test(arg))) return true;
+  return /^-[A-Za-z]+$/.test(arg) && [...arg.slice(1)].every((letter) => allowed.letters.includes(letter));
+}
 
 /**
  * Can the parent rerun a reviewer-supplied command without asking? Only a single simple read-only command qualifies:
- * a git read subcommand, grep or rg over repo-relative paths, or the exact test command recorded for the repo.
- * Everything else, including anything this function does not understand, needs the user's approval. Conservative by design;
- * it narrows what a reviewer can make the parent run, it is not a sandbox.
+ * a git read subcommand, grep or rg with exactly allowlisted options over plain repo-relative revisions and paths,
+ * or the exact test command recorded for the repo. Everything else, including anything this function does not understand,
+ * needs the user's approval. It narrows what a reviewer can make the parent run; it is not a sandbox (a repo's own
+ * textconv or attribute drivers and symlinks inside the repo are outside what it can see).
  */
 export function classifyCommand(command: string, testCommands: string[] = []): Rerun {
   if (squash(command) === '') return needs('empty command');
@@ -236,16 +275,24 @@ export function classifyCommand(command: string, testCommands: string[] = []): R
   const [prog, ...args] = tokens as [string, ...string[]];
   const git = prog === 'git';
   if (!git && prog !== 'grep' && prog !== 'rg') return needs('not git, grep, rg or the recorded test command');
-  const sub = args[0] ?? '';
-  if (git && !GIT_SUBS.has(sub)) return needs(sub.startsWith('-') ? 'git option before the subcommand' : 'git subcommand is not a read-only one');
-  const bad = git ? GIT_BAD : prog === 'rg' ? RG_BAD : /(?!)/;
-  for (const arg of args) {
-    if (bad.test(arg)) return needs('option ' + arg + ' can run code or write files');
-    const value = arg.startsWith('-') ? arg.slice(arg.indexOf('=') + 1) : arg;
-    if (arg.startsWith('-') && !arg.includes('=')) continue;
-    if (leavesRepo(value)) return needs('path outside the repo: ' + value);
+  const name = git ? 'git ' + (args.shift() ?? '') : prog;
+  const allowed = SPECS[name];
+  if (allowed === undefined) return needs(name + ' is not an allowlisted read-only command');
+  let paths = false;
+  for (let i = 0; i < args.length; i++) {
+    const arg = args[i] as string;
+    if (arg === '--' && !paths) {
+      paths = true;
+    } else if (arg === '-e' && allowed.pattern && !paths) {
+      const value = args[++i];
+      if (value === undefined || !PATTERN.test(value)) return needs('-e needs a plain pattern');
+    } else if (arg.startsWith('-') && !paths) {
+      if (!optionAllowed(arg, allowed, git)) return needs('option ' + arg + ' is not on the allowlist');
+    } else if (!plainPath(arg)) {
+      return needs('not a plain repo-relative path or revision: ' + arg);
+    }
   }
-  return auto('single read-only ' + (git ? 'git ' + sub : prog) + ' command over repo paths');
+  return auto('single read-only ' + name + ' command with allowlisted options over repo paths');
 }
 
 const USAGE = 'usage: review-findings.ts merge <reviewer-output-file>... | keep <findings.json> <id>... | classify <findings.json> [--test <command>]...';

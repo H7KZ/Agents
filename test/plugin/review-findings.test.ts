@@ -190,8 +190,10 @@ describe('classifyCommand', () => {
       'git diff main..HEAD -- src/a.ts',
       'git show HEAD:src/a.ts',
       'git log --oneline -n 5 --format=%H',
-      'git grep -n "needle here" -- src',
-      'git blame -L 1,5 src/a.ts',
+      'git grep -n -e "needle here" -- src',
+      'git grep -niw needle src',
+      'git blame -w src/a.ts',
+      'git log -U3 --unified=5 --max-count=2 --pretty=%H:%s',
       'git ls-files src',
       'git cat-file -p HEAD',
       'git rev-parse HEAD~1',
@@ -227,8 +229,68 @@ describe('classifyCommand', () => {
     for (const command of ['git show /etc/passwd', 'git show C:/x', 'git diff ../other', 'git diff a/../../b', 'git diff ..', 'grep -r x ~/.ssh', 'grep x /etc/hosts', 'rg x ../x', 'git blame --contents=/etc/passwd a.ts', 'git diff --src-prefix=../x']) {
       assert.equal(status(command), 'needs-approval', command);
     }
-    assert.equal(status('git diff --relative=src'), 'auto');
+    assert.equal(status('git diff --relative=src'), 'needs-approval');
     assert.equal(status('git diff main...HEAD'), 'auto');
+  });
+
+  it('needs approval for every bypass of a denylist: abbreviations, bundles, attached values, globs', () => {
+    for (const command of [
+      'git diff --out=x.patch',
+      'git diff --ext',
+      'git diff --ext-d',
+      'git log --exe=x',
+      'git grep -aO less x',
+      'git grep -O/etc/x y',
+      'git grep -Oless y',
+      'git log -ac',
+      'git log -n5c',
+      'git diff -U3x',
+      'git diff --unified=3a',
+      'git diff --unified=',
+      'git log --format=%H;x',
+      'git log --pretty=',
+      'git show *',
+      'git show a?',
+      'git show [a]',
+      'git ls-files *.ts',
+      'grep -rO x src',
+      'grep -rne x src',
+      'grep -f /etc/passwd src',
+      'grep --file=x src',
+      'grep --color=always x',
+      'rg -r x src',
+      'rg -j2 x',
+      'rg --follow x',
+      'rg -uuu x',
+      'git grep -e',
+      'git grep -e "*.x" src',
+      'git grep -e -x src',
+      'git grep -e [a] src',
+      'git status --ignored',
+      'git ls-files -z',
+      'git cat-file --batch',
+      'git rev-parse --git-dir',
+      'git diff -- ../x',
+      'git diff -- *',
+      'git diff -- -x',
+      'git diff -- -- x',
+    ]) {
+      assert.equal(status(command), 'needs-approval', command);
+    }
+  });
+
+  it('property: a glob, home, absolute, parent or dash-led argument is never auto', () => {
+    const hostile = fc.oneof(
+      fc.string().map((x) => x + '*'),
+      fc.string().map((x) => '?' + x),
+      fc.string().map((x) => '[' + x),
+      fc.string().map((x) => '/' + x),
+      fc.string().map((x) => '~' + x),
+      fc.string().map((x) => '../' + x),
+      fc.string().map((x) => 'a/../' + x),
+      fc.string().map((x) => '-' + x).filter((x) => !/^-[nps]*$/.test(x) && !/^-(?:U|n)d+$/.test(x)),
+    );
+    fc.assert(fc.property(fc.constantFrom('git diff', 'git log', 'git show', 'git grep -e a', 'grep -r a', 'rg a'), hostile, (base, arg) => assert.equal(classifyCommand(base + ' ' + arg).status, 'needs-approval')));
   });
 
   it('auto-runs the exact recorded test command, whatever its shape, and nothing similar', () => {
