@@ -50,6 +50,18 @@ Without the bootstrap: `claude plugin marketplace add H7KZ/Agents` then `claude 
 | `/h7:improve` | Work the improvement queue in `~/.h7/proposals` |
 | `/h7:formal-create`, `/h7:formal-maintain` | Opt-in TLA+/statechart models and drift checks |
 
+Full reference, workflow diagram and recommended workflows: **[docs/guide.md](docs/guide.md)**.
+
+```mermaid
+flowchart LR
+    D["/h7:doctor"] --> S["/h7:setup"] --> W["/h7:work"]
+    W --> V["/h7:verify"] --> R["/h7:review"] --> SH["/h7:ship"]
+    V -->|fail| W
+    R -->|findings| W
+    SH -->|CI fail| W
+    SH --> RT["/h7:retro"] --> IM["/h7:improve"]
+```
+
 All skills are user-invoked only (`disable-model-invocation: true`); nothing auto-triggers. Run `/h7:setup` in a repo
 before `/h7:work`. Runner minutes: CI runs 3 cells; run `npm run mutation` locally before merging.
 
