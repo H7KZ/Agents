@@ -290,7 +290,8 @@ describe('guard-core: kill switch and internal errors', () => {
 
 describe('guard-core: temporary directories', () => {
   const rm = (command: string, over: Partial<GuardIo> = {}, cwd = '/repo'): GuardResult => {
-    const r = guard({ payload: bash(command, { cwd }), over: { disk: { kind: (p) => (p.split(String.fromCharCode(92)).join('/').endsWith(`${cwd}/.git`) ? 'dir' : null), read: () => null }, ...over } });
+    // The home must not sit under the OS temp dir (it would exclude /tmp from the allowed dirs); allowed runs never write the log.
+    const r = guard({ home: '/nonexistent-guard-home', payload: bash(command, { cwd }), over: { disk: { kind: (p) => (p.split(String.fromCharCode(92)).join('/').endsWith(`${cwd}/.git`) ? 'dir' : null), read: () => null }, ...over } });
     return { code: r.code, stdout: r.stdout, stderr: r.stderr };
   };
 

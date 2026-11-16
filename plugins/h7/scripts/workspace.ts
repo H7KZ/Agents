@@ -1,5 +1,5 @@
-import { createHash } from 'node:crypto';
-import { lstatSync, mkdirSync, readdirSync, readFileSync, realpathSync } from 'node:fs';
+import { createHash, randomInt } from 'node:crypto';
+import { closeSync, createReadStream, lstatSync, mkdirSync, openSync, readdirSync, readFileSync, realpathSync, writeSync } from 'node:fs';
 import { homedir } from 'node:os';
 import path from 'node:path';
 import { createInterface } from 'node:readline/promises';
@@ -147,9 +147,11 @@ export interface FsIo {
   readdir(dir: string): string[];
 }
 
+/** The current user id; null where the platform has none (Windows). */
+export const currentUid = (getuid: (() => number) | null | undefined = process.getuid): number | null => (typeof getuid === 'function' ? getuid.call(process) : null);
+
 export const realFsIo: FsIo = {
-  /* node:coverage ignore next */
-  uid: typeof process.getuid === 'function' ? process.getuid() : null,
+  uid: currentUid(),
   lstat(file) {
     try {
       return lstatSync(file);
@@ -542,57 +544,103 @@ export function main(argv: string[], out: (text: string) => void, err: (text: st
   }
 }
 
+/** An open controlling terminal: where the code and the marker are shown and the answer is read from. Never stdin, stdout or stderr. */
+export interface TtyDevice {
+  write(text: string): void;
+  read(question: string): Promise<string>;
+  close(): void;
+}
+
 export interface TrustDeps {
-  isTTY: boolean;
-  prompt(question: string): Promise<string>;
+  /** The controlling terminal opened directly, or null when there is none (then nothing is trusted). */
+  openTty(): TtyDevice | null;
+  /** A fresh random code the person must type. */
+  nonce(): string;
   mkdir(dir: string): void;
   write(file: string, text: string, root: string): void;
 }
 
-/** The terminal glue: the prompt reads one line from stdin; trustMain refuses unless both ends are a TTY. */
-export const realTrustDeps = (): TrustDeps => ({
-  isTTY: [process.stdin, process.stdout].every((stream) => stream.isTTY === true),
-  prompt: async (question) => {
-    const lines = createInterface({ input: process.stdin, output: process.stdout });
-    try {
-      return await lines.question(question);
-    } finally {
+export const ttyPaths = (platform: string): { input: string; output: string } => (platform === 'win32' ? { input: 'CONIN$', output: 'CONOUT$' } : { input: '/dev/tty', output: '/dev/tty' });
+
+export type OpenFd = (file: string, flags: string) => number;
+
+/**
+ * Opens the controlling terminal directly (/dev/tty, or CONIN$ and CONOUT$ on Windows). A process whose stdio is piped, scripted or recorded can
+ * not answer on it, which is the point; but a pty wrapper that gives the process a controlling terminal can, so this is one layer, not a boundary.
+ */
+export function openTty(platform: string = process.platform, open: OpenFd = openSync): TtyDevice | null {
+  const paths = ttyPaths(platform);
+  let input: number;
+  let output: number;
+  try {
+    input = open(paths.input, 'r');
+    output = open(paths.output, 'w');
+  } catch {
+    return null;
+  }
+  const source = createReadStream('', { fd: input });
+  const lines = createInterface({ input: source });
+  return {
+    write: (text) => void writeSync(output, text),
+    read: (question) => {
+      writeSync(output, question);
+      return lines.question('');
+    },
+    close: () => {
       lines.close();
-    }
-  },
+      source.destroy();
+      closeSync(output);
+    },
+  };
+}
+
+export const realTrustDeps = (): TrustDeps => ({
+  openTty,
+  nonce: () => String(randomInt(100000, 1000000)),
   mkdir: (dir) => void mkdirSync(dir, { recursive: true, mode: 0o700 }),
   write: (file, text, root) => writeAtomic(file, text, root, undefined, undefined, 0o600),
 });
 
 /**
- * `workspace.ts trust [<marker>]`: shows the marker, asks the person at a terminal to type "yes", and records the sha256 of exactly that text in the
- * owner-only trust file. Refuses without a TTY (an agent cannot answer), for a marker that is not trustworthy, and for a malformed trust file.
+ * `workspace.ts trust [<marker>]`, run by the person in their own terminal: shows the marker and a random code ONLY on the controlling terminal
+ * (opened directly, not stdin/stdout/stderr, which an agent sees), and records the sha256 of exactly that text when the same code is typed back there.
+ * Without a terminal it refuses. stdout says only "trusted" or "refused". Refuses for a marker that is not trustworthy and for a malformed trust file.
  */
 export async function trustMain(args: string[], out: (text: string) => void, err: (text: string) => void, cwd: string, io: FsIo, home: string, deps: TrustDeps): Promise<number> {
-  if (!deps.isTTY) {
-    err('refusing: trusting a workspace marker needs an interactive terminal (stdin is not a TTY). Run this yourself in a terminal; an agent cannot do it.');
+  const tty = deps.openTty();
+  if (tty === null) {
+    err('refusing: no controlling terminal could be opened. Run this yourself, in your own terminal; an agent cannot do it for you.');
+    out('refused');
     return 2;
   }
-  try {
+  const code = await confirm(args, out, err, cwd, io, home, deps, tty).catch((error: unknown) => {
+    err(error instanceof WorkspaceError ? error.message : `workspace failed: ${(error as Error).message}`);
+    out('refused');
+    return 2;
+  });
+  tty.close();
+  return code;
+}
+
+async function confirm(args: string[], out: (text: string) => void, err: (text: string) => void, cwd: string, io: FsIo, home: string, deps: TrustDeps, tty: TtyDevice): Promise<number> {
+  {
     const [target, ...extra] = args;
     if (extra.length > 0) throw fail(USAGE);
     const start = target === undefined ? cwd : path.resolve(cwd, path.basename(target) === MARKER ? path.dirname(target) : target);
     const found = locateMarker(start, io, home);
     if (found === null || (target !== undefined && fold(found.dir) !== fold(canonicalPath(io, start)))) throw fail(`no ${MARKER} found ${target === undefined ? 'above here' : `in ${target}`}`);
-    out(`Marker: ${found.file}\nSHA-256: ${sha256(found.text)}\nState: ${found.trust}\n----\n${found.text}\n----\nTrusting it lets this workspace set a scratch directory the guard treats as safe to delete in, and ship defaults (push, auto-merge).`);
-    if ((await deps.prompt('Type yes to trust exactly this text: ')).trim() !== 'yes') {
-      err('not trusted');
+    const code = deps.nonce();
+    tty.write(`\nMarker: ${found.file}\nSHA-256: ${sha256(found.text)}\nState: ${found.trust}\n----\n${found.text}\n----\nTrusting it lets this workspace set a scratch directory the guard treats as safe to delete in, and ship defaults (push, auto-merge).\n`);
+    if ((await tty.read(`Type ${code} to trust exactly this text (anything else cancels): `)).trim() !== code) {
+      out('refused');
       return 1;
     }
     const existing = readTrustText(io, home);
     existing[found.file] = sha256(found.text);
     deps.mkdir(path.dirname(trustFile(home)));
     deps.write(trustFile(home), `${JSON.stringify(existing, null, 2)}\n`, home);
-    out(`trusted ${found.file}`);
+    out('trusted');
     return 0;
-  } catch (error) {
-    err(error instanceof WorkspaceError ? error.message : `workspace failed: ${(error as Error).message}`);
-    return 2;
   }
 }
 
@@ -614,9 +662,14 @@ function readTrustText(io: FsIo, home: string): Record<string, string> {
   return Object.fromEntries(Object.entries(raw).filter((entry): entry is [string, string] => typeof entry[1] === 'string'));
 }
 
+/** The command line: `trust` is interactive, everything else is `main`. */
+export async function cli(argv: string[], out: (text: string) => void, err: (text: string) => void, cwd: string, io: FsIo, home: string, deps: TrustDeps): Promise<number> {
+  const [cmd, ...rest] = argv;
+  return cmd === 'trust' ? trustMain(rest, out, err, cwd, io, home, deps) : main(argv, out, err, cwd, io, home);
+}
+
 if (import.meta.main) {
-  const [cmd, ...rest] = process.argv.slice(2);
   const out = (text: string): void => console.log(text);
   const err = (text: string): void => console.error(text);
-  process.exitCode = cmd === 'trust' ? await trustMain(rest, out, err, process.cwd(), realFsIo, defaultHome(), realTrustDeps()) : main(process.argv.slice(2), out, err);
+  process.exitCode = await cli(process.argv.slice(2), out, err, process.cwd(), realFsIo, defaultHome(), realTrustDeps());
 }

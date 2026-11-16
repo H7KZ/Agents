@@ -1,7 +1,5 @@
 import assert from 'node:assert/strict';
-import { spawnSync } from 'node:child_process';
-import { mkdirSync, readFileSync, statSync, symlinkSync, writeFileSync } from 'node:fs';
-import { pathToFileURL } from 'node:url';
+import { mkdirSync, openSync, readFileSync, statSync, symlinkSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { describe, it } from 'node:test';
 import fc from 'fast-check';
@@ -13,6 +11,7 @@ import {
   WorkspaceError,
   base,
   canonicalPath,
+  currentUid,
   defaultHome,
   findRepoRoot,
   findWorkspace,
@@ -28,6 +27,9 @@ import {
   stateDir,
   trustFile,
   trustMain,
+  openTty,
+  ttyPaths,
+  cli,
   realTrustDeps,
   trustOf,
   workspaceFor,
@@ -291,7 +293,7 @@ describe('workspace resolution', () => {
 
   it('refuses a symlinked marker and an unreadable one', () => {
     const { ws, home } = makeWs();
-    const fake = (link: boolean): FsIo => ({ ...realFsIo, lstat: (file) => (file.endsWith(MARKER) ? { isSymbolicLink: () => link, isFile: () => true, isDirectory: () => false, size: 3, uid: 0, mode: 0 } : realFsIo.lstat(file)), read: () => { throw new Error('EACCES'); } });
+    const fake = (link: boolean): FsIo => ({ ...realFsIo, lstat: (file) => (file.endsWith(MARKER) ? { isSymbolicLink: () => link, isFile: () => true, isDirectory: () => false, size: 3, uid: realFsIo.uid ?? 0, mode: 0o644 } : realFsIo.lstat(file)), read: () => { throw new Error('EACCES'); } });
     assert.throws(() => findWorkspace(join(ws, 'web'), fake(true), home), /symlink/);
     assert.throws(() => findWorkspace(join(ws, 'web'), fake(false), home), /cannot read .*EACCES/);
   });
@@ -418,6 +420,8 @@ describe('marker trust', () => {
 
   it('the real file system reports a user id on POSIX and null on Windows', () => {
     assert.equal(realFsIo.uid === null, process.platform === 'win32');
+    assert.equal(currentUid(null), null);
+    assert.equal(currentUid(() => 42), 42);
   });
 });
 
@@ -479,27 +483,39 @@ describe('hash trust', () => {
 });
 
 describe('workspace.ts status and trust', () => {
+  const NONCE = '482913';
   const sh = (): { out: string[]; err: string[]; o: (t: string) => void; e: (t: string) => void } => {
     const out: string[] = [];
     const err: string[] = [];
     return { out, err, o: (t) => out.push(t), e: (t) => err.push(t) };
   };
-  const deps = (answer: string, tty = true): TrustDeps & { prompts: string[]; written: Array<[string, string, string]>; dirs: string[] } => {
-    const prompts: string[] = [];
+  /** A fake controlling terminal: records what is shown on it and answers with answer(code). */
+  const deps = (answer: (code: string) => string, hasTty = true) => {
+    const shown: string[] = [];
+    const asked: string[] = [];
     const written: Array<[string, string, string]> = [];
     const dirs: string[] = [];
-    return {
-      isTTY: tty,
-      prompt: async (q) => {
-        prompts.push(q);
-        return answer;
+    let closed = 0;
+    let opened = 0;
+    const d: TrustDeps = {
+      openTty: () => {
+        opened += 1;
+        return hasTty
+          ? {
+              write: (text) => void shown.push(text),
+              read: async (question) => {
+                asked.push(question);
+                return answer(NONCE);
+              },
+              close: () => void (closed += 1),
+            }
+          : null;
       },
+      nonce: () => NONCE,
       mkdir: (dir) => void dirs.push(dir),
       write: (file, text, root) => void written.push([file, text, root]),
-      prompts,
-      written,
-      dirs,
     };
+    return { d, shown, asked, written, dirs, closes: () => closed, opens: () => opened };
   };
 
   it('status reports untrusted, then trusted, then changed, and null without a marker', () => {
@@ -526,23 +542,35 @@ describe('workspace.ts status and trust', () => {
     assert.deepEqual([none.trust, none.trusted], [null, null]);
   });
 
-  it('refuses without a terminal and writes nothing', async () => {
+  it('refuses without a controlling terminal, saying only refused on stdout, and writes nothing', async () => {
     const { ws, home } = makeWs(MIN, ['web']);
     const s = sh();
-    const d = deps('yes', false);
-    assert.equal(await trustMain([], s.o, s.e, join(ws, 'web'), realFsIo, home, d), 2);
-    assert.match(s.err[0] as string, /needs an interactive terminal/);
-    assert.deepEqual([d.prompts, d.written, d.dirs], [[], [], []]);
+    const t = deps(() => NONCE, false);
+    assert.equal(await trustMain([], s.o, s.e, join(ws, 'web'), realFsIo, home, t.d), 2);
+    assert.deepEqual(s.out, ['refused']);
+    assert.match(s.err[0] as string, /no controlling terminal .* your own terminal/);
+    assert.deepEqual([t.asked, t.written, t.dirs, t.opens()], [[], [], [], 1]);
   });
 
-  it('shows the marker, and anything but a typed yes trusts nothing', async () => {
+  it('shows the marker and the code only on the terminal; stdout and stderr never carry them', async () => {
     const { ws, home } = makeWs(MIN, ['web']);
-    for (const answer of ['', 'y', 'YES', 'no', 'yes please']) {
+    const s = sh();
+    const t = deps(() => NONCE);
+    assert.equal(await trustMain([], s.o, s.e, join(ws, 'web'), realFsIo, home, t.d), 0);
+    const onTerminal = [...t.shown, ...t.asked].join('');
+    for (const secret of [MIN, sha256(MIN), NONCE, join(ws, MARKER)]) assert.ok(onTerminal.includes(secret), secret);
+    const leaked = [...s.out, ...s.err].join('\n');
+    for (const secret of [MIN, sha256(MIN), NONCE, ws]) assert.ok(!leaked.includes(secret), secret);
+    assert.deepEqual(s.out, ['trusted']);
+  });
+
+  it('anything but the exact code trusts nothing, and the terminal is always closed', async () => {
+    const { ws, home } = makeWs(MIN, ['web']);
+    for (const answer of ['', 'yes', 'y', '000000', `${NONCE}0`, '48291', 'no']) {
       const s = sh();
-      const d = deps(answer);
-      assert.equal(await trustMain([], s.o, s.e, join(ws, 'web'), realFsIo, home, d), 1, answer);
-      assert.ok((s.out[0] as string).includes(MIN) && (s.out[0] as string).includes(sha256(MIN)));
-      assert.deepEqual(d.written, []);
+      const t = deps(() => answer);
+      assert.equal(await trustMain([], s.o, s.e, join(ws, 'web'), realFsIo, home, t.d), 1, answer);
+      assert.deepEqual([s.out, t.written, t.closes()], [['refused'], [], 1], answer);
     }
   });
 
@@ -551,33 +579,32 @@ describe('workspace.ts status and trust', () => {
     mkdirSync(join(home, '.h7'), { recursive: true });
     writeFileSync(trustFile(home), JSON.stringify({ '/other/.h7-workspace.json': 'abc', bad: 3 }));
     const s = sh();
-    const d = deps(' yes ');
-    assert.equal(await trustMain([], s.o, s.e, join(ws, 'web'), realFsIo, home, d), 0);
-    assert.equal(d.written.length, 1);
-    const [file, text, root] = d.written[0] as [string, string, string];
-    assert.deepEqual([file, root, d.dirs], [trustFile(home), home, [join(home, '.h7')]]);
+    const t = deps((code) => ` ${code} `);
+    assert.equal(await trustMain([], s.o, s.e, join(ws, 'web'), realFsIo, home, t.d), 0);
+    assert.equal(t.written.length, 1);
+    const [file, text, root] = t.written[0] as [string, string, string];
+    assert.deepEqual([file, root, t.dirs, t.closes()], [trustFile(home), home, [join(home, '.h7')], 1]);
     assert.deepEqual(JSON.parse(text), { '/other/.h7-workspace.json': 'abc', [join(ws, MARKER)]: sha256(MIN) });
     writeFileSync(trustFile(home), text);
     assert.equal(trustOf(realFsIo, home, join(ws, MARKER), MIN), 'trusted');
-    assert.match(s.out.at(-1) as string, /^trusted /);
   });
 
   it('takes an explicit marker path or directory, and rejects other places', async () => {
     const { ws, home } = makeWs(MIN, ['web']);
     for (const target of [join(ws, MARKER), ws, join(ws, '..', 'team')]) {
-      const d = deps('yes');
-      assert.equal(await trustMain([target], () => undefined, () => undefined, tmpDir('h7-cwd-'), realFsIo, home, d), 0, target);
-      assert.equal(d.written.length, 1);
+      const t = deps((code) => code);
+      assert.equal(await trustMain([target], () => undefined, () => undefined, tmpDir('h7-cwd-'), realFsIo, home, t.d), 0, target);
+      assert.equal(t.written.length, 1);
     }
     const s = sh();
-    const d = deps('yes');
-    assert.equal(await trustMain([join(ws, 'web')], s.o, s.e, ws, realFsIo, home, d), 2);
+    const t = deps((code) => code);
+    assert.equal(await trustMain([join(ws, 'web')], s.o, s.e, ws, realFsIo, home, t.d), 2);
     assert.match(s.err[0] as string, /no \.h7-workspace\.json found in /);
-    assert.equal(await trustMain(['relative'], s.o, s.e, ws, realFsIo, home, d), 2);
-    assert.equal(await trustMain([], s.o, s.e, tmpDir('h7-cwd-'), realFsIo, home, d), 2);
+    assert.equal(await trustMain(['relative'], s.o, s.e, ws, realFsIo, home, t.d), 2);
+    assert.equal(await trustMain([], s.o, s.e, tmpDir('h7-cwd-'), realFsIo, home, t.d), 2);
     assert.match(s.err.at(-1) as string, /found above here/);
-    assert.equal(await trustMain(['a', 'b'], s.o, s.e, ws, realFsIo, home, d), 2);
-    assert.deepEqual(d.written, []);
+    assert.equal(await trustMain(['a', 'b'], s.o, s.e, ws, realFsIo, home, t.d), 2);
+    assert.deepEqual([t.written, s.out.at(-1), t.closes()], [[], 'refused', 4]);
   });
 
   it('refuses a malformed trust file instead of replacing it, and reports an untrustworthy marker', async () => {
@@ -586,52 +613,66 @@ describe('workspace.ts status and trust', () => {
     for (const body of ['{nope', '[1]']) {
       writeFileSync(trustFile(home), body);
       const s = sh();
-      const d = deps('yes');
-      assert.equal(await trustMain([], s.o, s.e, join(ws, 'web'), realFsIo, home, d), 2);
+      const t = deps((code) => code);
+      assert.equal(await trustMain([], s.o, s.e, join(ws, 'web'), realFsIo, home, t.d), 2);
       assert.match(s.err[0] as string, /workspaces\.json (is not valid JSON|must be a JSON object)/);
-      assert.deepEqual(d.written, []);
+      assert.deepEqual(t.written, []);
     }
     writeFileSync(join(ws, MARKER), '{bad');
     const s = sh();
-    assert.equal(await trustMain([], s.o, s.e, join(ws, 'web'), realFsIo, home, deps('yes')), 2);
+    assert.equal(await trustMain([], s.o, s.e, join(ws, 'web'), realFsIo, home, deps((code) => code).d), 2);
     assert.match(s.err[0] as string, /not valid JSON/);
     const boom = sh();
     const throwing = { ...realFsIo, lstat: () => { throw new Error('kaput'); } };
-    assert.equal(await trustMain([], boom.o, boom.e, ws, throwing, home, deps('yes')), 2);
+    assert.equal(await trustMain([], boom.o, boom.e, ws, throwing, home, deps((code) => code).d), 2);
     assert.match(boom.err[0] as string, /workspace failed: kaput/);
   });
 
-  it('the real terminal glue: prompt reads a line, mkdir and write make an owner-only file', () => {
+  it('cli dispatches trust to the interactive command and everything else to main', async () => {
+    const { ws, home } = makeWs(MIN, ['web']);
+    const s = sh();
+    assert.equal(await cli(['state-dir'], s.o, s.e, join(ws, 'web'), realFsIo, home, deps(() => '').d), 0);
+    assert.equal(s.out[0], slash(join(ws, '.h7', 'web')));
+    const t = deps((code) => code);
+    assert.equal(await cli(['trust'], s.o, s.e, join(ws, 'web'), realFsIo, home, t.d), 0);
+    assert.equal(t.written.length, 1);
+  });
+
+  it('opens the terminal device directly: /dev/tty, or CONIN$ and CONOUT$ on Windows', () => {
+    assert.deepEqual(ttyPaths('linux'), { input: '/dev/tty', output: '/dev/tty' });
+    assert.deepEqual(ttyPaths('darwin'), { input: '/dev/tty', output: '/dev/tty' });
+    assert.deepEqual(ttyPaths('win32'), { input: 'CONIN$', output: 'CONOUT$' });
+    const tried: string[] = [];
+    assert.equal(openTty('linux', (file) => { tried.push(file); throw new Error('ENXIO'); }), null);
+    assert.equal(openTty('win32', (file, flags) => { tried.push(`${file}:${flags}`); if (file === 'CONOUT$') throw new Error('no console'); return 1; }), null);
+    assert.deepEqual(tried, ['/dev/tty', 'CONIN$:r', 'CONOUT$:w']);
+  });
+
+  it('a terminal device writes and reads through the files it opened, and closes them', async () => {
+    const dir = tmpDir('h7-tty-');
+    const input = join(dir, 'in.txt');
+    const output = join(dir, 'out.txt');
+    writeFileSync(input, '123456\nignored\n');
+    writeFileSync(output, '');
+    const device = openTty('linux', (file, flags) => openSync(flags === 'r' ? input : output, flags === 'r' ? 'r' : 'a')) as NonNullable<ReturnType<typeof openTty>>;
+    device.write('shown\n');
+    assert.equal(await device.read('code? '), '123456');
+    device.close();
+    assert.equal(readFileSync(output, 'utf8'), 'shown\ncode? ');
+  });
+
+  it('the real deps: a random six digit code, an owner-only trust file, and the real terminal opener', () => {
     const real = realTrustDeps();
-    assert.equal(typeof real.isTTY, 'boolean');
+    for (let i = 0; i < 20; i++) assert.match(real.nonce(), /^[1-9]\d{5}$/);
+    assert.notEqual(new Set(Array.from({ length: 20 }, () => real.nonce())).size, 1);
+    assert.equal(real.openTty, openTty);
     const home = tmpDir('h7-glue-');
     real.mkdir(join(home, '.h7'));
     real.write(trustFile(home), '{"a":"b"}', home);
     assert.equal(readFileSync(trustFile(home), 'utf8'), '{"a":"b"}');
     if (process.platform !== 'win32') assert.equal(statSync(trustFile(home)).mode & 0o077, 0);
-    const code = `import { realTrustDeps } from ${JSON.stringify(pathToFileURL(SCRIPT).href)}; console.log(JSON.stringify(await realTrustDeps().prompt('q? ')));`;
-    const result = spawnSync(process.execPath, ['--input-type=module', '-e', code], { input: ['yes', 'ignored', ''].join('\n'), encoding: 'utf8' });
-    assert.equal(result.status, 0, result.stderr);
-    assert.match(result.stdout, /"yes"/);
-  });
-
-  it('the script refuses without a terminal', SLOW, () => {
-    const { ws, home } = makeWs(MIN, ['web']);
-    const result = runNode(SCRIPT, ['trust'], { cwd: join(ws, 'web'), env: { H7_HOME: home } });
-    assert.equal(result.status, 2);
-    assert.match(result.stderr, /interactive terminal/);
-    assert.ok(!existsSyncSafe(trustFile(home)));
   });
 });
-
-function existsSyncSafe(file: string): boolean {
-  try {
-    readFileSync(file);
-    return true;
-  } catch {
-    return false;
-  }
-}
 
 describe('workspace.ts command line', () => {
   const run = (cwd: string, args: string[], home: string, extra: Record<string, string> = {}): ReturnType<typeof main> extends number ? { code: number; out: string[]; err: string[] } : never => {

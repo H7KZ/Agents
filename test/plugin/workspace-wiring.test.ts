@@ -136,7 +136,7 @@ describe('workspace mode wiring', () => {
     assert.equal(journal(['start'], { ...jenv(web, home), err: (t) => errs.push(t) }), 2);
     assert.match(errs[0] as string, /not valid JSON/);
     assert.equal(retro(['list'], { ...renv, err: (t: string) => errs.push(t) }), 2);
-    assert.equal(stateMain(['init'], () => undefined, (t) => errs.push(t), web), 2);
+    withHome(home, () => assert.equal(stateMain(['init'], () => undefined, (t) => errs.push(t), web), 2));
   });
 
   it('a malformed marker makes the stop gate allow with a message, the CI store inert and verify-state fail', () => {
