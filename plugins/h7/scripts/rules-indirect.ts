@@ -21,6 +21,16 @@ function isPositional(word: string): boolean {
   return !word.startsWith('-') && !word.startsWith('//') && PLAIN_WORD.test(word) && !SCHEME.test(word);
 }
 
+/** bun and deno subcommands that manage packages or tooling without running a program (publish and installs are judged by the deploy rules). */
+const NON_RUNNING_SUBCOMMANDS = new Set(['install', 'i', 'add', 'remove', 'rm', 'update', 'upgrade', 'publish', 'pm', 'link', 'unlink', 'outdated', 'audit', 'init', 'build', 'fmt', 'lint', 'check', 'doc', 'info', 'bench', 'compile', 'cache', 'help', 'version']);
+
+/** A flag of the script itself; a value after = must be as plain as a path (no URL scheme, no // or \\ start). */
+function scriptFlag(word: string): boolean {
+  if (!SCRIPT_FLAG.test(word)) return false;
+  const value = word.includes('=') ? word.slice(word.indexOf('=') + 1) : '';
+  return !value.startsWith('//') && (!SCHEME.test(value) || /^[A-Za-z]:[\\/]/.test(value));
+}
+
 /**
  * Strict allowlist, no denylist and no per-interpreter flag grammar beyond a handful of known-safe flags: a non-shell
  * interpreter call passes only when every word is an allowed flag, a plain path or module name, or (after the script or
@@ -29,13 +39,22 @@ function isPositional(word: string): boolean {
 function placeable(name: string, argv: string[]): boolean {
   const python = PYTHON.test(name);
   const js = JS_RUNTIME.test(name);
+  const runner = /^(?:bun|deno)$/i.test(name);
+  const deno = /^deno$/i.test(name);
   let script = false;
   for (let i = 0; i < argv.length; i++) {
     const word = argv[i] as string;
     if (script) {
-      if (isPositional(word) || SCRIPT_FLAG.test(word)) continue;
+      if (isPositional(word) || scriptFlag(word)) continue;
       return false;
     }
+    if (runner && i === 0) {
+      // run and test are runtime context, not the script: runtime flags are still checked until the real script positional.
+      if (word === 'run' || word === 'test') continue;
+      if (NON_RUNNING_SUBCOMMANDS.has(word)) return true;
+      if (!/[./\\]/.test(word)) return false;
+    }
+    if (deno && /^(?:-A|--allow-[a-z-]+)$/.test(word)) continue;
     if (python && word === '-m') {
       if (!/^[\w.]+$/.test(argv[++i] ?? '')) return false;
       script = true;
