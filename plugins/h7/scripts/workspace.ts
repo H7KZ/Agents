@@ -121,9 +121,13 @@ export interface Stat {
   isSymbolicLink(): boolean;
   isFile(): boolean;
   size: number;
+  uid: number;
+  mode: number;
 }
 
 export interface FsIo {
+  /** The current user id; null where ownership cannot be checked (Windows). */
+  uid: number | null;
   lstat(file: string): Stat | null;
   /** Throws when the path does not exist. */
   realpath(file: string): string;
@@ -131,6 +135,8 @@ export interface FsIo {
 }
 
 export const realFsIo: FsIo = {
+  /* node:coverage ignore next */
+  uid: typeof process.getuid === 'function' ? process.getuid() : null,
   lstat(file) {
     try {
       return lstatSync(file);
@@ -194,10 +200,21 @@ export interface Workspace {
   /** Absolute runtime directory for this repo: `<root>/<stateDir>/<repo>`. */
   stateDir: string;
   marker: Marker;
+  /** As declared, except push and auto-merge are dropped when the marker owner could not be verified. */
   settings: RepoSettings;
+  /** The marker and its directory passed the ownership checks (POSIX only). */
+  trusted: boolean;
   /** Absolute paths, all checked to stay inside the workspace. */
   files: { verification: string; prTemplate: string | null; agents: string; glossary: string; adr: string };
   scratch: string | null;
+}
+
+/** POSIX: the marker and its directory belong to the current user and nobody else can write them. Anything else is an error, never a quiet skip. */
+function checkOwner(path: string, what: string, io: FsIo): void {
+  if (io.uid === null) return;
+  const stat = io.lstat(path) as Stat;
+  if (stat.uid !== io.uid) throw fail(`${what} ${path} is owned by uid ${stat.uid}, not by you (uid ${io.uid}); refusing to trust it`);
+  if ((stat.mode & 0o022) !== 0) throw fail(`${what} ${path} is writable by group or others (mode ${(stat.mode & 0o777).toString(8)}); refusing to trust it`);
 }
 
 function readMarker(file: string, io: FsIo): Marker {
@@ -218,11 +235,7 @@ function readMarker(file: string, io: FsIo): Marker {
   }
 }
 
-function build(dir: string, file: string, marker: Marker, key: string, repoRoot: string, io: FsIo): Workspace {
-  const root = io.realpath(dir);
-  const real = canonicalPath(io, repoRoot);
-  const found = slash(path.relative(root, real));
-  if (fold(found) !== fold(key)) throw fail(`${file}: repository ${JSON.stringify(key)} resolves to ${JSON.stringify(found)} (symlink?); it must be a real directory inside the workspace`);
+function build(root: string, file: string, marker: Marker, key: string, real: string, io: FsIo): Workspace {
   const confine = (rel: string, what: string): string => {
     const abs = path.join(root, rel);
     if (!inside(root, canonicalPath(io, abs))) throw fail(`${file}: ${what} resolves outside the workspace (symlink?)`);
@@ -236,7 +249,10 @@ function build(dir: string, file: string, marker: Marker, key: string, repoRoot:
   };
   const stateDir = outsideRepos(confine(`${marker.stateDir}/${key}`, 'stateDir'), 'stateDir');
   const scratch = marker.scratch === null ? null : outsideRepos(confine(marker.scratch, 'scratch'), 'scratch');
-  const settings = marker.repos.get(key) as RepoSettings;
+  // Push and auto-merge are only honoured from a marker whose ownership was actually verified (POSIX); elsewhere the user says so per run.
+  const trusted = io.uid !== null;
+  const declared = marker.repos.get(key) as RepoSettings;
+  const settings: RepoSettings = { ...declared, ship: trusted ? declared.ship : 'pr', autoMerge: trusted && declared.autoMerge };
   const glossary = marker.memory.glossary ?? glossaryName(io, root);
   return {
     root,
@@ -246,6 +262,7 @@ function build(dir: string, file: string, marker: Marker, key: string, repoRoot:
     stateDir,
     marker,
     settings,
+    trusted,
     files: {
       verification: confine(settings.verification, 'verification'),
       prTemplate: settings.prTemplate === null ? null : confine(settings.prTemplate, 'prTemplate'),
@@ -258,30 +275,28 @@ function build(dir: string, file: string, marker: Marker, key: string, repoRoot:
 }
 
 /**
- * Walks up from the repo top level (never above $HOME, and not HOME itself) to the filesystem root. The nearest marker that LISTS the repo wins;
- * a marker that does not list it is skipped. A marker that cannot be trusted (symlink, too big, malformed, listing a repo that escapes) throws.
+ * Walks up from the REAL repo top level, only through directories strictly inside the REAL home: a repo outside home never gets workspace mode, and
+ * a marker in home itself or above it (a shared /tmp, a parent of a cloned repo) is never looked at. The nearest marker that LISTS the repo wins;
+ * one that does not is skipped. A marker that cannot be trusted (symlink, wrong owner, group/world writable, too big, malformed) throws.
  */
-export function workspaceFor(repoRoot: string, io: FsIo, home: string | null): Workspace | null {
-  const stop = home === null ? null : fold(path.resolve(home));
-  let last = repoRoot;
-  let dir = path.dirname(repoRoot);
-  while (dir !== last) {
-    if (stop !== null && fold(dir) === stop) return null;
+export function workspaceFor(repoRoot: string, io: FsIo, home: string): Workspace | null {
+  const realHome = canonicalPath(io, home);
+  const real = canonicalPath(io, repoRoot);
+  if (!inside(realHome, real) || fold(realHome) === fold(real)) return null;
+  for (let dir = path.dirname(real); fold(dir) !== fold(realHome); dir = path.dirname(dir)) {
     const file = path.join(dir, MARKER);
-    if (io.lstat(file) !== null) {
-      const marker = readMarker(file, io);
-      const rel = slash(path.relative(dir, repoRoot));
-      const key = [...marker.repos.keys()].find((name) => fold(name) === fold(rel));
-      if (key !== undefined) return build(dir, file, marker, key, repoRoot, io);
-    }
-    last = dir;
-    dir = path.dirname(dir);
+    if (io.lstat(file) === null) continue;
+    checkOwner(file, 'workspace marker', io);
+    checkOwner(dir, 'workspace directory', io);
+    const marker = readMarker(file, io);
+    const key = [...marker.repos.keys()].find((name) => fold(name) === fold(slash(path.relative(dir, real))));
+    if (key !== undefined) return build(dir, file, marker, key, real, io);
   }
   return null;
 }
 
-export function findWorkspace(cwd: string, io: FsIo = realFsIo, home: string | null = defaultHome()): Workspace | null {
-  const repoRoot = findRepoRoot(path.resolve(cwd), io);
+export function findWorkspace(cwd: string, io: FsIo = realFsIo, home: string = defaultHome()): Workspace | null {
+  const repoRoot = findRepoRoot(cwd, io);
   return repoRoot === null ? null : workspaceFor(repoRoot, io, home);
 }
 
@@ -294,8 +309,8 @@ export interface Context {
   containRoot: string;
 }
 
-export function resolveContext(cwd: string, io: FsIo = realFsIo, home: string | null = defaultHome()): Context {
-  const start = path.resolve(cwd);
+export function resolveContext(cwd: string, io: FsIo = realFsIo, home: string = defaultHome()): Context {
+  const start = cwd;
   const repoRoot = findRepoRoot(start, io);
   const workspace = repoRoot === null ? null : workspaceFor(repoRoot, io, home);
   if (workspace !== null) return { repoRoot, workspace, stateDir: workspace.stateDir, containRoot: workspace.root };
@@ -303,7 +318,26 @@ export function resolveContext(cwd: string, io: FsIo = realFsIo, home: string | 
   return { repoRoot, workspace: null, stateDir: path.join(root, '.h7'), containRoot: root };
 }
 
-export const stateDir = (cwd: string, io?: FsIo, home?: string | null): string => resolveContext(cwd, io, home).stateDir;
+/** Where one repo's journal state lives: in the repo's own .h7 directory normally, under the workspace state directory in workspace mode (nothing is then written inside the repo). */
+export interface Place {
+  root: string;
+  state: string;
+  /** Writes must stay inside this directory. */
+  contain: string;
+  /** state relative to contain, for the symlink walk. */
+  parts: string[];
+  workspace: boolean;
+  /** The AGENTS.md that retro rows go into: the workspace one in workspace mode. */
+  agents: string;
+}
+
+export function placeOf(root: string, fs: FsIo = realFsIo, home: string = defaultHome()): Place {
+  const ws = workspaceFor(root, fs, home);
+  if (ws === null) return { root, state: path.join(root, '.h7'), contain: root, parts: ['.h7'], workspace: false, agents: path.join(root, 'AGENTS.md') };
+  return { root, state: ws.stateDir, contain: ws.root, parts: path.relative(ws.root, ws.stateDir).split(path.sep), workspace: true, agents: ws.files.agents };
+}
+
+export const stateDir = (cwd: string, io?: FsIo, home?: string): string => resolveContext(cwd, io, home).stateDir;
 
 export interface Settings {
   mode: 'workspace' | 'repo';
@@ -316,16 +350,16 @@ export interface Settings {
   autoMerge: boolean | null;
 }
 
-export function settings(cwd: string, io?: FsIo, home?: string | null): Settings {
+export function settings(cwd: string, io?: FsIo, home?: string): Settings {
   const context = resolveContext(cwd, io, home);
   const { workspace } = context;
-  if (workspace === null) return { mode: 'repo', base: null, verification: path.join(context.repoRoot ?? path.resolve(cwd), 'docs', 'agents', 'verification.md'), prTemplate: null, ship: null, autoMerge: null };
+  if (workspace === null) return { mode: 'repo', base: null, verification: path.join(context.repoRoot ?? cwd, 'docs', 'agents', 'verification.md'), prTemplate: null, ship: null, autoMerge: null };
   const { settings: repo, files } = workspace;
   return { mode: 'workspace', base: repo.base, verification: files.verification, prTemplate: files.prTemplate, ship: repo.ship, autoMerge: repo.autoMerge };
 }
 
 /** The configured base branch of this repo in workspace mode, else null. */
-export const base = (cwd: string, io?: FsIo, home?: string | null): string | null => settings(cwd, io, home).base;
+export const base = (cwd: string, io?: FsIo, home?: string): string | null => settings(cwd, io, home).base;
 
 export interface Memory {
   agents: string;
@@ -334,16 +368,16 @@ export interface Memory {
 }
 
 /** Absolute paths of the repo memory files: the workspace's in workspace mode, else the repo's own AGENTS.md, CONTEXT.md (or GLOSSARY.md) and docs/adr. */
-export function memory(cwd: string, io: FsIo = realFsIo, home?: string | null): Memory {
+export function memory(cwd: string, io: FsIo = realFsIo, home?: string): Memory {
   const context = resolveContext(cwd, io, home);
   if (context.workspace !== null) return { agents: context.workspace.files.agents, glossary: context.workspace.files.glossary, adr: context.workspace.files.adr };
-  const root = context.repoRoot ?? path.resolve(cwd);
+  const root = context.repoRoot ?? cwd;
   return { agents: path.join(root, 'AGENTS.md'), glossary: path.join(root, glossaryName(io, root)), adr: path.join(root, 'docs', 'adr') };
 }
 
 const USAGE = 'usage: workspace.ts show | state-dir';
 
-export function main(argv: string[], out: (text: string) => void, err: (text: string) => void, cwd: string = process.cwd(), io: FsIo = realFsIo, home: string | null = defaultHome()): number {
+export function main(argv: string[], out: (text: string) => void, err: (text: string) => void, cwd: string = process.cwd(), io: FsIo = realFsIo, home: string = defaultHome()): number {
   const [cmd, ...rest] = argv;
   if ((cmd !== 'show' && cmd !== 'state-dir') || rest.length > 0) {
     err(USAGE);

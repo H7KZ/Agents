@@ -232,24 +232,31 @@ describe('workspace resolution', () => {
     assert.equal(findWorkspace(join(inner, 'tool'), realFsIo, home)?.stateDir, join(ws, '.h7', 'group', 'tool'));
   });
 
-  it('never looks at or above $HOME, but without a home it walks to the filesystem root', () => {
+  it('never looks at HOME itself or above it, and a repo outside HOME never gets workspace mode', () => {
     const { ws, home } = makeWs();
     writeFileSync(join(home, MARKER), json({ version: 1, repos: { 'code/team/web': {} } }));
     rmMarker(ws);
     assert.equal(findWorkspace(join(ws, 'web'), realFsIo, home), null);
-    assert.equal(findWorkspace(join(ws, 'web'), realFsIo, null)?.root, home);
-    assert.equal(findWorkspace(join(ws, 'web'), realFsIo, join(home, 'code'))?.root, undefined);
+    // The real marker sits at ws; with HOME = ws it is HOME itself, and with HOME below ws the repo is outside HOME.
+    writeFileSync(join(ws, MARKER), json({ version: 1, repos: { web: {} } }));
+    assert.equal(findWorkspace(join(ws, 'web'), realFsIo, ws), null);
+    assert.equal(findWorkspace(join(ws, 'web'), realFsIo, join(ws, 'server')), null);
+    assert.equal(findWorkspace(join(ws, 'web'), realFsIo, join(home, 'code'))?.root, ws);
+    // HOME itself as the repo: nothing above it is considered.
+    assert.equal(workspaceFor(home, realFsIo, home), null);
   });
 
-  it('stops at the filesystem root, including a repo that sits directly under it', () => {
-    const marked: FsIo = {
-      lstat: (file) => (file === `${join('/', MARKER)}` || file === join('/', 'top', '.git') ? { isSymbolicLink: () => false, isFile: () => true, size: 5 } : null),
-      realpath: (file) => file,
-      read: () => json({ version: 1, repos: { top: {} } }),
-    };
-    assert.equal(workspaceFor(join('/', 'top'), marked, null)?.repo, 'top');
-    assert.equal(workspaceFor(join('/', 'top'), { ...marked, lstat: () => null }, null), null);
-    assert.equal(workspaceFor('/', marked, null), null);
+  it('property: a marker is only ever found inside the real home', () => {
+    fc.assert(
+      fc.property(fc.array(fc.constantFrom('a', 'b', 'c'), { minLength: 0, maxLength: 3 }), fc.integer({ min: 0, max: 3 }), (below, up) => {
+        const { ws, home } = makeWs(MIN, ['web']);
+        const marker = join(home, ...['code', 'team'].slice(0, Math.max(0, 2 - up)));
+        const found = findWorkspace(join(ws, 'web', ...below), realFsIo, marker);
+        assert.ok(found === null || found.root.startsWith(marker));
+        assert.ok(found === null || found.root !== marker);
+      }),
+      { numRuns: runs(20) },
+    );
   });
 
   it('fails with a clear error for an untrustworthy marker instead of falling back silently', () => {
@@ -269,20 +276,19 @@ describe('workspace resolution', () => {
 
   it('refuses a symlinked marker and an unreadable one', () => {
     const { ws, home } = makeWs();
-    const fake = (link: boolean): FsIo => ({ ...realFsIo, lstat: (file) => (file.endsWith(MARKER) ? { isSymbolicLink: () => link, isFile: () => true, size: 3 } : realFsIo.lstat(file)), read: () => { throw new Error('EACCES'); } });
+    const fake = (link: boolean): FsIo => ({ ...realFsIo, lstat: (file) => (file.endsWith(MARKER) ? { isSymbolicLink: () => link, isFile: () => true, size: 3, uid: 0, mode: 0 } : realFsIo.lstat(file)), read: () => { throw new Error('EACCES'); } });
     assert.throws(() => findWorkspace(join(ws, 'web'), fake(true), home), /symlink/);
     assert.throws(() => findWorkspace(join(ws, 'web'), fake(false), home), /cannot read .*EACCES/);
   });
 
-  it('refuses a listed repo that is a symlink out of the workspace or to another listed path', () => {
-    const { ws, home } = makeWs({ version: 1, repos: { link: {}, web: {} } }, ['web']);
+  it('a listed repo that is a symlink to elsewhere is outside HOME or a different repo, never trusted as itself', () => {
+    const { ws, home } = makeWs({ version: 1, repos: { link: {}, web: {}, alias: {} } }, ['web']);
     const outside = tmpDir('h7-outside-');
     mkdirSync(join(outside, '.git'));
     symlinkSync(outside, join(ws, 'link'), 'junction');
-    assert.throws(() => findWorkspace(join(ws, 'link'), realFsIo, home), /resolves to .* \(symlink\?\)/);
+    assert.equal(findWorkspace(join(ws, 'link'), { ...realFsIo, lstat: realFsIo.lstat }, join(ws, '..')), null);
     symlinkSync(join(ws, 'web'), join(ws, 'alias'), 'junction');
-    writeFileSync(join(ws, MARKER), json({ version: 1, repos: { alias: {}, web: {} } }));
-    assert.throws(() => findWorkspace(join(ws, 'alias'), realFsIo, home), /resolves to "web"/);
+    assert.equal(findWorkspace(join(ws, 'alias'), realFsIo, home)?.repo, 'web');
   });
 
   it('refuses a stateDir, scratch or file that a symlink points outside the workspace or into a repo', () => {
@@ -321,6 +327,81 @@ describe('workspace resolution', () => {
 function rmMarker(ws: string): void {
   writeFileSync(join(ws, MARKER), json({ version: 1, repos: { other: {} } }));
 }
+
+/** The marker and the workspace directory report the given owner and mode; everything else is the real disk. */
+function owned(ws: string, uid: number | null, fileMode: number, dirMode = 0o755, fileUid = uid, dirUid = uid): FsIo {
+  return {
+    ...realFsIo,
+    uid,
+    lstat(file) {
+      const stat = realFsIo.lstat(file);
+      if (stat === null || (!file.endsWith(MARKER) && file !== ws)) return stat;
+      const marker = file.endsWith(MARKER);
+      return { isSymbolicLink: () => stat.isSymbolicLink(), isFile: () => stat.isFile(), size: stat.size, uid: (marker ? fileUid : dirUid) ?? 0, mode: marker ? fileMode : dirMode };
+    },
+  };
+}
+
+describe('marker trust', () => {
+  const UID = 1000;
+  const RISKY = { version: 1, repos: { web: { ship: 'push', autoMerge: true } } };
+
+  it('accepts a marker and directory owned by the user and not writable by others', () => {
+    const { ws, home } = makeWs(RISKY, ['web']);
+    for (const mode of [0o600, 0o644, 0o640]) {
+      const found = findWorkspace(join(ws, 'web'), owned(ws, UID, mode), home);
+      assert.deepEqual([found?.trusted, found?.settings.ship, found?.settings.autoMerge], [true, 'push', true]);
+    }
+  });
+
+  it('refuses, naming the reason, a marker owned by someone else', () => {
+    const { ws, home } = makeWs(RISKY, ['web']);
+    assert.throws(() => findWorkspace(join(ws, 'web'), owned(ws, UID, 0o644, 0o755, 0), home), (e: unknown) => e instanceof WorkspaceError && /workspace marker .* is owned by uid 0, not by you \(uid 1000\)/.test(e.message));
+  });
+
+  it('refuses a directory owned by someone else', () => {
+    const { ws, home } = makeWs(RISKY, ['web']);
+    assert.throws(() => findWorkspace(join(ws, 'web'), owned(ws, UID, 0o644, 0o755, UID, 0), home), /workspace directory .* is owned by uid 0/);
+  });
+
+  it('refuses a marker or directory that group or others can write', () => {
+    const { ws, home } = makeWs(RISKY, ['web']);
+    for (const mode of [0o666, 0o664, 0o646, 0o622, 0o020, 0o002]) {
+      assert.throws(() => findWorkspace(join(ws, 'web'), owned(ws, UID, mode), home), /workspace marker .* writable by group or others \(mode \d+\)/);
+      assert.throws(() => findWorkspace(join(ws, 'web'), owned(ws, UID, 0o644, mode), home), /workspace directory .* writable by group or others/);
+    }
+  });
+
+  it('checks the marker before reading it, so an untrusted file is never parsed', () => {
+    const { ws, home } = makeWs('{garbage', ['web']);
+    assert.throws(() => findWorkspace(join(ws, 'web'), owned(ws, UID, 0o666), home), /writable by group or others/);
+  });
+
+  it('where ownership cannot be checked (Windows) the marker still works, but push and auto-merge are not honoured', () => {
+    const { ws, home } = makeWs(RISKY, ['web']);
+    const found = findWorkspace(join(ws, 'web'), owned(ws, null, 0o666, 0o777), home);
+    assert.deepEqual([found?.trusted, found?.settings.ship, found?.settings.autoMerge], [false, 'pr', false]);
+    assert.deepEqual([found?.marker.repos.get('web')?.ship, found?.marker.repos.get('web')?.autoMerge], ['push', true]);
+    const s = settings(join(ws, 'web'), owned(ws, null, 0o666), home);
+    assert.deepEqual([s.ship, s.autoMerge], ['pr', false]);
+  });
+
+  it('property: untrusted markers never yield push or auto-merge', () => {
+    fc.assert(
+      fc.property(fc.boolean(), fc.boolean(), fc.constantFrom('pr', 'push'), (autoMerge, ownerKnown, ship) => {
+        const { ws, home } = makeWs({ version: 1, repos: { web: { ship, autoMerge } } }, ['web']);
+        const found = findWorkspace(join(ws, 'web'), owned(ws, ownerKnown ? UID : null, 0o600), home);
+        assert.equal(found?.settings.autoMerge, ownerKnown && autoMerge);
+        assert.equal(found?.settings.ship, ownerKnown ? ship : 'pr');
+      }),
+      { numRuns: runs(30) },
+    );
+  });
+
+  it('the real file system reports a user id on POSIX and null on Windows', () => {
+    assert.equal(realFsIo.uid === null, process.platform === 'win32');
+  });
+});
 
 describe('workspace.ts command line', () => {
   const run = (cwd: string, args: string[], home: string, extra: Record<string, string> = {}): ReturnType<typeof main> extends number ? { code: number; out: string[]; err: string[] } : never => {
