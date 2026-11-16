@@ -18,6 +18,20 @@ Run inside the target repo. Detect, run, write, prove, report.
 6. Never edit outside the h7 markers in AGENTS.md, and never grow AGENTS.md past 150 lines. Use `setup-files.ts` for AGENTS.md, CLAUDE.md and the exclude file; do not hand-edit them. Run it from the repo root with repo-relative paths; it refuses symlinks and paths outside the repo (report that to the user, e.g. a linked worktree's shared exclude file).
 7. Work on branch `h7/setup`, never on the default or a protected branch. Never push.
 
+## Workspace mode (team repos where h7 is only your workflow)
+
+Run `node "${CLAUDE_PLUGIN_ROOT}/scripts/workspace.ts" show`. If `mode` is `workspace` (a `.h7-workspace.json` above this repo lists it; `/h7:doctor` validates it), nothing of h7 may land in the repo, not even git-excluded files. The rules above hold with these substitutions; detection still runs against the repo, read-only:
+
+- No branch `h7/setup`, no `git switch`, no commits, no `.git/info/exclude` edit. A dirty tree is fine (nothing in it is touched).
+- `.h7/...` means the printed `stateDir` (outside the repo), including `detect.json`, `agents-block.md`, `setup-log.md` and `evidence/`.
+- The recipe goes to the `verification` path from `show` (default `<ws>/docs/agents/verification-<repo>.md`), not `docs/agents/verification.md`.
+- The verify skill goes to `<ws>/.claude/skills/verify-<repo>/SKILL.md` (a monorepo: `verify-<repo>-<app>`), not into the repo.
+- The AGENTS block goes into `memory.agents` (the workspace `AGENTS.md`), 150-line cap unchanged; the repo's own `AGENTS.md` and `CLAUDE.md` are never touched. Run `setup-files.ts` with cwd set to the workspace root and workspace-relative paths.
+- Repo memory names: the glossary is `memory.glossary` from `show` (`CONTEXT.md`, or `GLOSSARY.md` when that is the one that exists).
+- Report "workspace mode, nothing written inside the repo" and verify it: `git status --short --ignored` in the repo shows no h7 file.
+
+A malformed marker is an error: stop and show it. The marker's `ship` and `autoMerge` are the answers to the ship questions; do not ask again, and say when they are ignored because the marker is not yet trusted (the user runs `node "${CLAUDE_PLUGIN_ROOT}/scripts/workspace.ts" trust` in a terminal).
+
 ## 1. Prepare
 
 1. `git status --short`. If dirty, stop and report; do not stash or reset.

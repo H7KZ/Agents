@@ -18,6 +18,10 @@ Run inside the target repo, on a feature branch, after `/h7:verify`. Reviews pro
 6. Send the diff to nothing outside this machine except an external reviewer the user approved (step 5).
 7. Never push. Commits made while fixing follow the repo convention, else Conventional Commits, with the attribution trailer the session instructs.
 
+## Workspace mode
+
+Run `node "${CLAUDE_PLUGIN_ROOT}/scripts/workspace.ts" show`. When `mode` is `workspace`, every `.h7/` path below means the printed `stateDir` (outside the repo; `mkdir -p` it, write nothing inside the repo), the rule files to hand reviewers are the printed `verification`, `memory.agents`, `memory.glossary` (`CONTEXT.md` or `GLOSSARY.md`) and `memory.adr`, and the default `--base` is the printed `base`. In repo mode nothing changes.
+
 ## 1. Scope
 
 ```

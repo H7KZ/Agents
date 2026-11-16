@@ -18,6 +18,10 @@ disable-model-invocation: true
 6. Rows and journals are local state: `.h7/` is git-excluded, never committed, never quoted into a commit message beyond the row text. Put no secrets in rows; the script redacts, but do not rely on it.
 7. Installing a tool or dependency for a proposed check needs its own yes (name, why, the exact command).
 
+## Workspace mode
+
+Run `node "${CLAUDE_PLUGIN_ROOT}/scripts/workspace.ts" show`. When `mode` is `workspace`, `.h7/` below means the printed `stateDir` (journals and `retro/rows.json` live outside the repo), and `apply` targets the workspace `AGENTS.md` (the printed `memory.agents`, the default `--file`) instead of the repo's; a `--file` path is relative to the workspace root. The repo is never written. In repo mode nothing changes.
+
 ## 1. Collect
 
 ```

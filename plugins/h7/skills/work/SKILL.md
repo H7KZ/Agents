@@ -27,6 +27,10 @@ The Stop gate in the frontmatter blocks stopping while `.h7/verify.json` has a `
 7. Unattended runs (see Unattended mode) never wait on a human and never weaken anything: a block, deny or need is parked, not bypassed.
 8. Stop after 5 consecutive non-improving rounds (step 5, counted by `run-journal.ts progress`, not by you) and report. Do not start a sixth.
 
+## Workspace mode
+
+Run `node "${CLAUDE_PLUGIN_ROOT}/scripts/workspace.ts" show` first. When `mode` is `workspace` (a `.h7-workspace.json` above the repo lists it), `.h7/` below means the printed `stateDir` (outside the repo: the journal, `verify.json`, `review/`, `ci-watch.json`; the scripts resolve it themselves and never write `.h7/` or `.git/info/exclude` in the repo), the recipe is the printed `verification` file, the base branch is the printed `base`, memory files are the printed `memory.*` paths, and the phase skills follow the same substitution. A malformed marker is an error: stop and show it. A marker that is not `trusted` still gives paths and base, but its scratch dir, push and auto-merge are ignored: tell the user to run `node "${CLAUDE_PLUGIN_ROOT}/scripts/workspace.ts" trust` in a terminal. In repo mode nothing changes.
+
 ## 0. Start or resume
 
 1. Read `docs/agents/verification.md` (the check command, thresholds, ship mode). Missing: tell the user `/h7:setup` writes it, and continue only if they want to; verify and ship will then ask for what they need.

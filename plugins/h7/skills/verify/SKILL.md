@@ -17,6 +17,10 @@ Run inside the target repo, on a feature branch. Scope = what the change touches
 5. Never push. Commits follow the repo convention (`git.commitConvention`), else Conventional Commits, with the attribution trailer the session instructs.
 6. Record every layer; the Stop gate reads the record (step 1). A layer is `pass`, `fail` or `na` (with a reason). Never leave one `pending`.
 
+## Workspace mode
+
+Run `node "${CLAUDE_PLUGIN_ROOT}/scripts/workspace.ts" show` once. `mode: "workspace"` means a `.h7-workspace.json` above this repo lists it: every `.h7/` path in this skill then means the printed `stateDir` (absolute, outside the repo; the scripts find it themselves, `mkdir -p` it before redirecting into it), the recipe is the file printed as `verification` (not `docs/agents/verification.md`), the default `--base` is the printed `base`, and nothing is created inside the repo. A malformed marker is an error: stop and show it. `mode: "repo"`: nothing changes. `trust` other than `trusted`: tell the user to read the marker and run `node "${CLAUDE_PLUGIN_ROOT}/scripts/workspace.ts" trust` in a terminal; until then scratch, push and auto-merge from it are ignored.
+
 ## 1. Scope and state
 
 ```
@@ -25,7 +29,7 @@ node "${CLAUDE_PLUGIN_ROOT}/scripts/verify-scope.ts" > .h7/scope.json
 node "${CLAUDE_PLUGIN_ROOT}/scripts/verify-state.ts" init
 ```
 
-`scope.json` lists `warnings[]` (read them: for example no merge base) and `files[]` (`path`, `kind` source, test or other, changed `ranges`, `whole` for untracked files) against the merge base with the default branch. Pass `--base <ref>` when the default branch is not `main` or `master`. Keep `.h7/` out of git (`/h7:setup` does this). If there are no source changes, mark every layer `na` with "no source change" and stop.
+`scope.json` lists `warnings[]` (read them: for example no merge base) and `files[]` (`path`, `kind` source, test or other, changed `ranges`, `whole` for untracked files) against the merge base with the default branch. The default base is the workspace `base` when set, else the remote's `origin/HEAD`, else `origin/main`, `origin/master`, `main`, `master`, `origin/develop`, `develop`; pass `--base <ref>` to override. Keep `.h7/` out of git (`/h7:setup` does this). If there are no source changes, mark every layer `na` with "no source change" and stop.
 
 Record each layer as you finish it. Every status needs one line of evidence or reason (the command and its result); the CLI refuses a bare `pass` and the gate treats one as incomplete:
 
@@ -56,7 +60,7 @@ On decline, the layer is `fail` with "tool not installed (declined)", never `na`
 ## 4. Diff coverage (100% line and branch, no global drop)
 
 1. Produce lcov for the full unit run (the report must include the changed files).
-2. For the global-drop check, produce a baseline report from the merge base in a throwaway worktree: `git worktree add ../h7-base <mergeBase>`, run the coverage command there, copy its lcov out, then `git worktree remove ../h7-base`. If the baseline cannot be produced, say so and compare against the last baseline recorded in `verification.md`, else `fail` with the reason.
+2. For the global-drop check, produce a baseline report from the merge base from a pristine copy in the OS temp dir, never next to the repo: `dir=$(node "${CLAUDE_PLUGIN_ROOT}/scripts/baseline-tree.ts" create <mergeBase>)` (it is `git archive | tar -x`: no worktree, nothing added to the repo's `.git`), run the coverage command there (install dependencies there if the command needs them), copy its lcov out, then `node "${CLAUDE_PLUGIN_ROOT}/scripts/baseline-tree.ts" remove "$dir"`. Never `git worktree add ../h7-base`. If the baseline cannot be produced, say so and compare against the last baseline recorded in `verification.md`, else `fail` with the reason.
 3. Measure:
 
 ```
