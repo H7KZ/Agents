@@ -870,3 +870,142 @@ describe('scan state helpers', () => {
     assert.equal(pickDecision(decisions)?.decision, 'block');
   });
 });
+
+describe('git config: key and value found among all positionals', () => {
+  const ASK_HOOKS = 'ask:skip-git-hooks';
+  const ALIAS = 'ask:git-alias';
+
+  it('finds core.hooksPath after subcommand words and value-taking options', () => {
+    table({}, [
+      ['git config set core.hooksPath /dev/null', HOOKS],
+      ['git config set --global core.hooksPath /dev/null', HOOKS],
+      ['git config --global set core.hooksPath /dev/null', HOOKS],
+      ['git config replace-all core.hooksPath /dev/null', HOOKS],
+      ['git config add core.hooksPath /dev/null', HOOKS],
+      ['git config --add core.hooksPath /dev/null', HOOKS],
+      ['git config -f .git/config core.hooksPath /dev/null', HOOKS],
+      ['git config --file ../x.cfg core.hookspath /dev/null', HOOKS],
+      ['git config --file=x.cfg CORE.HOOKSPATH /dev/null', HOOKS],
+      ['git config --type path core.hooksPath /dev/null', HOOKS],
+      ['git config --type=path core.hooksPath /dev/null', HOOKS],
+      ['git config --blob HEAD:x core.hooksPath /dev/null', HOOKS],
+      ['git config --comment why core.hooksPath /dev/null', HOOKS],
+      ['git config -- core.hooksPath /dev/null', HOOKS],
+      ['git config set core.hooksPath tools', ASK_HOOKS],
+      ['git config set core.hooksPath .husky', null],
+      ['git config -f x.cfg core.hooksPath .githooks', null],
+    ]);
+  });
+
+  it('finds alias definitions in the same positions', () => {
+    table({}, [
+      ["git config set alias.pf 'push -f origin main'", FORCE],
+      ["git config --file x.cfg alias.pf 'push -f origin main'", FORCE],
+      ["git config --type=bool alias.x '!git push -f origin main'", FORCE],
+      ["git config replace-all alias.st status", ALIAS],
+      ["git config set alias.st status", ALIAS],
+    ]);
+  });
+
+  it('does not treat reads and removals as writes', () => {
+    table({}, [
+      ['git config get core.hooksPath', null],
+      ['git config --get core.hooksPath', null],
+      ['git config --get-all core.hooksPath', null],
+      ['git config --unset core.hooksPath /dev/null', null],
+      ['git config --unset-all core.hooksPath', null],
+      ['git config --list', null],
+      ['git config --get alias.st', null],
+      ['git config user.name core.hooksPathx', null],
+    ]);
+  });
+
+  it('asks when a key-looking word is swallowed as an option value, so what is set is unclear', () => {
+    table({}, [
+      ['git config -f core.hooksPath user.name x', ASK_HOOKS],
+      ['git config --default core.hooksPath user.name x', ASK_HOOKS],
+      ['git config --type core.hooksPath user.name x', ASK_HOOKS],
+      ['git config --comment alias.x user.name y', ASK_HOOKS],
+    ]);
+  });
+});
+
+describe('interpreter inline programs are matched by option grammar', () => {
+  it('finds the program in combined short flags, attached text and long forms', () => {
+    table({}, [
+      ['python3 -Bc "import shutil"', INDIRECT],
+      ['python3 -Bc"import shutil"', INDIRECT],
+      ['python3 -c"import os; os.system(1)"', INDIRECT],
+      ['python3 -u -B -c "import subprocess"', INDIRECT],
+      ['python3 -W ignore -c "import shutil"', INDIRECT],
+      ['python3 -Wignore -c "import shutil"', INDIRECT],
+      ['perl -we "unlink 1"', INDIRECT],
+      ['perl -wE "unlink 1"', INDIRECT],
+      ['perl -e"unlink 1"', INDIRECT],
+      ['perl -ne "unlink 1"', INDIRECT],
+      ['perl -i.bak -pe "unlink 1"', INDIRECT],
+      ['perl -MList::Util=sum -e "unlink 1"', INDIRECT],
+      ['ruby -we "system(%q(rm -rf x))"', INDIRECT],
+      ['ruby -e"system(%q(rm -rf x))"', INDIRECT],
+      ['node -pe "require(\'child_process\').exec(1)"', INDIRECT],
+      ['node -e"require(\'child_process\').exec(1)"', INDIRECT],
+      ['node --eval="require(\'child_process\').exec(1)"', INDIRECT],
+      ['node --eval "require(\'child_process\').exec(1)"', INDIRECT],
+      ['node --print "require(\'child_process\').exec(1)"', INDIRECT],
+      ['node -r ts-node/register -e "require(\'child_process\').exec(1)"', INDIRECT],
+      ['node --no-warnings --eval "require(\'child_process\').exec(1)"', INDIRECT],
+      ['php -r "exec(1);"', INDIRECT],
+      ['php --run "exec(1);"', INDIRECT],
+      ['php -r"exec(1);"', INDIRECT],
+      ['osascript -e "do shell script \\"rm -rf x\\""', INDIRECT],
+      ['py -c "import shutil"', INDIRECT],
+      ['pypy3 -c "import shutil"', INDIRECT],
+      ['perl5.36 -e "unlink 1"', INDIRECT],
+      ['ruby3.2 -e "system(%q(rm -rf x))"', INDIRECT],
+      ['php8.2 -r "exec(1);"', INDIRECT],
+      ['nodejs -e "require(\'child_process\').exec(1)"', INDIRECT],
+    ]);
+  });
+
+  it('allows benign inline programs, scripts and options after the script', () => {
+    table({}, [
+      ['python3 -Bc "print(1)"', null],
+      ['python3 -m pytest -c conf.ini', null],
+      ['python3 -mpytest', null],
+      ['python3 script.py -c "import shutil"', null],
+      ['python3 -V', null],
+      ['python3 -W error script.py', null],
+      ['node script.js -e "require(\'child_process\')"', null],
+      ['node --version', null],
+      ['node --test test.ts', null],
+      ['node --no-warnings script.js', null],
+      ['node -v', null],
+      ['node -r ts-node/register script.ts', null],
+      ['node -- script.js', null],
+      ['node -pe "1+1"', null],
+      ['node --eval="1"', null],
+      ['perl -we "print 1"', null],
+      ['perl -i.bak -pe "s/a/b/"', null],
+      ['perl script.pl -e unlink', null],
+      ['ruby -we "puts 1"', null],
+      ['php -r"echo 1;"', null],
+      ['php -v', null],
+      ['osascript script.scpt', null],
+      ['osascript -l JavaScript -e "1"', null],
+      ['python3', null],
+      ['deno run x.ts', null],
+    ]);
+  });
+
+  it('asks when an interpreter option cannot be placed', () => {
+    table({}, [
+      ['python3 -3 -c "print(1)"', INDIRECT],
+      ['python3 -Z', INDIRECT],
+      ['node -Z script.js', INDIRECT],
+      ['perl -Z -e 1', INDIRECT],
+      ['ruby -j script.rb', INDIRECT],
+      ['php -j x.php', INDIRECT],
+      ['osascript -z', INDIRECT],
+    ]);
+  });
+});
