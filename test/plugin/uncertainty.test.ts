@@ -207,27 +207,20 @@ describe('parser uncertainty resolves to ask', () => {
     ]);
   });
 
-  it('interpreters run with their own program are only judged by what the program says', () => {
+  it('interpreters run with their own program ask when any argument looks like code, and pass plain flags and paths', () => {
     table({}, [
       ['python -m code', null],
       ['python3 -m http.server', null],
       ['python3 app.py', null],
       ['node app.js', null],
       ['bash script.sh', null],
-      ['python3 -c "print(1)"', null],
+      ['python3 -c "print(1)"', INDIRECT],
       ['python3 -c "import shutil; shutil.rmtree(1)"', INDIRECT],
-      ['python3 -c "import os; os.system(1)"', INDIRECT],
-      ['python -c "import subprocess"', INDIRECT],
-      ['node -e "console.log(1)"', null],
-      ['node -e "require(\'child_process\').exec(1)"', INDIRECT],
+      ['node -e "console.log(1)"', INDIRECT],
       ['node -p "require(\'fs\').unlinkSync(1)"', INDIRECT],
-      ['node --eval "x" ', null],
-      ['perl -e "unlink 1"', INDIRECT],
-      ['perl -E "say 1"', null],
-      ['ruby -e "system(%q(rm -rf x))"', INDIRECT],
-      ['ruby -e "puts 1"', null],
-      ['php -r "exec(1);"', INDIRECT],
-      ['osascript -e "tell app 1"', null],
+      ['perl -E "say 1"', INDIRECT],
+      ['ruby -e "puts 1"', INDIRECT],
+      ['osascript -e "tell app 1"', INDIRECT],
       ['python3 -c', null],
     ]);
   });

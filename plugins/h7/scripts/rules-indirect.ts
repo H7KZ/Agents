@@ -7,10 +7,11 @@ const INTERPRETER = /^(?:sh|bash|zsh|dash|ksh|ash|fish|python[\d.]*|pypy[\d.]*|p
 /** Interpreters whose inline or script arguments are not re-scanned as shell (shells, pwsh and cmd are). */
 const NON_SHELL = /^(?:python[\d.]*|pypy[\d.]*|py|node|nodejs|deno|bun|perl[\d.]*|ruby[\d.]*|php[\d.]*|osascript|Rscript|lua[\d.]*)$/i;
 /**
- * No flag parsing: every argument word of a non-shell interpreter is scanned for tokens that delete, execute, fetch or push.
- * Parsing each interpreter's options kept being bypassed (attached-only letters, php -B/-R/-E/-F, node --import data:).
+ * Fail closed, no flag parsing and no denylist: an argument word that looks like code (shell or program punctuation, whitespace
+ * inside one word, a data: or http(s): URL) means the interpreter may run a program the guard cannot read. Plain flags, paths and
+ * module names (`-m pytest`, `--test`, `script.ts arg`) pass. Per-interpreter option grammars and token denylists were bypassed.
  */
-const DANGEROUS = /\brm\s|rmtree|unlink|remove\(|rmdir|child_process|execSync|spawn|os\.system|subprocess|popen|system\(|exec\(|eval\(|shutil|\bgit\s|Remove-Item|data:|https?:\/\/|base64|fs\.rm|rmsync/i;
+const CODE_LIKE = /[(){};`$=><|&'"\s]|^(?:data|https?):/i;
 const EVALUATORS = new Set(['invoke-expression', 'iex']);
 const XARGS_VALUE_FLAGS = new Set(['-I', '-n', '-P', '-d', '-L', '-E', '-s', '-a']);
 /** Flags with no value, or with an optional value that can only be attached (-i, -l, -e). */
@@ -58,7 +59,7 @@ function xargsCommand(argv: string[]): XargsCommand {
 
 function interpreter(name: string, argv: string[], flow: Flow): Decision | null {
   if (flow.piped || flow.input || argv.includes('-s') || argv.includes('-')) return indirect(`Feeding ${name} from stdin`);
-  return NON_SHELL.test(name) && DANGEROUS.test(argv.join(' ')) ? indirect(`${name} with arguments that delete, execute, fetch or push`) : null;
+  return NON_SHELL.test(name) && argv.some((word) => CODE_LIKE.test(word)) ? indirect(`${name} with an argument that looks like code`) : null;
 }
 
 export function evaluateIndirection(simple: Simple, flow: Flow): Decision | null {
