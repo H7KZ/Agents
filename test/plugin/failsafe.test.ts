@@ -11,6 +11,9 @@ import { repoDisk, ruleOf } from './support.ts';
 
 cleanupTmp();
 
+// Catches exponential blow-ups, not micro-regressions: generous so a loaded machine (parallel mutation runs) does not flake.
+const BUDGET_MS = Number(process.env.H7_PERF_BUDGET_MS ?? 5000);
+
 const runner: Runner = (args) => (args[0] === 'rev-parse' ? { status: 0, stdout: '/repo\n' } : { status: 128, stdout: '' });
 
 function guard(command: string, over: Partial<GuardIo> = {}) {
@@ -121,7 +124,7 @@ describe('brace expansion limits', () => {
       const result = expandBraces(word);
       assert.ok(result === null || result.length <= 256);
     }
-    assert.ok(performance.now() - start < 1000);
+    assert.ok(performance.now() - start < BUDGET_MS);
   });
 
   it('property: arbitrary brace soup terminates quickly with null or a bounded list', () => {
@@ -130,7 +133,7 @@ describe('brace expansion limits', () => {
         const start = performance.now();
         const result = expandBraces(word);
         assert.ok(result === null || (result.length >= 1 && result.length <= 256));
-        assert.ok(performance.now() - start < 1000);
+        assert.ok(performance.now() - start < BUDGET_MS);
       }),
       { numRuns: runs(400) },
     );
@@ -153,7 +156,7 @@ describe('pathological inputs stay fast and never allow destructive commands', (
       for (const filler of ['echo ' + 'a'.repeat(100_000) + '\n', ': ' + 'x '.repeat(50_000) + ';', '# ' + 'c'.repeat(100_000) + '\n']) {
         const start = performance.now();
         const result = guard(filler + command);
-        assert.ok(performance.now() - start < 1000, `${command} took too long`);
+        assert.ok(performance.now() - start < BUDGET_MS, `${command} took too long`);
         assert.notEqual(verdict(result), 'allow', command);
       }
     }
@@ -163,7 +166,7 @@ describe('pathological inputs stay fast and never allow destructive commands', (
     for (const command of ['a'.repeat(100_000), `"${'a'.repeat(100_000)}`, `$(${'a'.repeat(100_000)}`, `\`${'a'.repeat(100_000)}`, '('.repeat(50_000), '$('.repeat(30_000), '{'.repeat(100_000), `echo ${'$(echo '.repeat(2000)}`, `cat <<EOF\n${'x\n'.repeat(50_000)}`]) {
       const start = performance.now();
       guard(command);
-      assert.ok(performance.now() - start < 1000, command.slice(0, 20));
+      assert.ok(performance.now() - start < BUDGET_MS, command.slice(0, 20));
     }
   });
 
@@ -179,7 +182,7 @@ describe('pathological inputs stay fast and never allow destructive commands', (
         for (const wrapped of [nestBash(command, Math.min(depth, 8)), `echo ${nestSubst(command, depth)}`]) {
           const start = performance.now();
           const result = guard(wrapped);
-          assert.ok(performance.now() - start < 1000);
+          assert.ok(performance.now() - start < BUDGET_MS);
           assert.notEqual(verdict(result), 'allow', `${command} @${depth}`);
         }
       }
