@@ -15,7 +15,7 @@ Run inside the target repo. Detect, run, write, prove, report.
 3. Install no tooling. Missing layers are gaps; `/h7:verify` fills them later with user approval. Installing the repo's own declared dependencies (`<pm> install --frozen-lockfile`) is allowed.
 4. Never run commands whose script `kind` is `deploy`, nor anything that publishes, migrates, seeds or touches real services. Never read or write `.env` files or secrets.
 5. The verify skill must be proven end to end once (launch, drive one feature, evidence, cleanup). If it cannot be, report `BLOCKED` with exactly what the user must provide. Never fake a proof.
-6. Never edit outside the h7 markers in AGENTS.md, and never grow AGENTS.md past 150 lines. Use `setup-files.ts` for AGENTS.md, CLAUDE.md and the exclude file; do not hand-edit them.
+6. Never edit outside the h7 markers in AGENTS.md, and never grow AGENTS.md past 150 lines. Use `setup-files.ts` for AGENTS.md, CLAUDE.md and the exclude file; do not hand-edit them. Run it from the repo root with repo-relative paths; it refuses symlinks and paths outside the repo (report that to the user, e.g. a linked worktree's shared exclude file).
 7. Work on branch `h7/setup`, never on the default or a protected branch. Never push.
 
 ## 1. Prepare

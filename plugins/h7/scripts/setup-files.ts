@@ -1,5 +1,5 @@
-import { mkdirSync, readFileSync, writeFileSync } from 'node:fs';
-import { dirname } from 'node:path';
+import { existsSync, lstatSync, mkdirSync, readFileSync, realpathSync, renameSync, writeFileSync } from 'node:fs';
+import { dirname, isAbsolute, relative, resolve, sep } from 'node:path';
 
 export const BEGIN = '<!-- h7:begin -->';
 export const END = '<!-- h7:end -->';
@@ -70,19 +70,53 @@ function readOrNull(file: string): string | null {
   }
 }
 
+export type Lstat = (path: string) => { isSymbolicLink(): boolean } | null;
+
+const safeLstat: Lstat = (path) => {
+  try {
+    return lstatSync(path);
+  } catch {
+    return null;
+  }
+};
+
+/** Why a path must not be read or written, or null. Symlinks and anything resolving outside the repo root are refused. */
+export function pathProblem(file: string, root: string, lstat: Lstat = safeLstat): string | null {
+  const abs = resolve(root, file);
+  if (lstat(abs)?.isSymbolicLink()) return `refusing symlink: ${file}`;
+  let dir = dirname(abs);
+  while (!existsSync(dir)) dir = dirname(dir);
+  const rel = relative(realpathSync(root), realpathSync(dir));
+  return rel === '..' || rel.startsWith(`..${sep}`) || isAbsolute(rel) ? `refusing path outside the repo: ${file}` : null;
+}
+
+function writeAtomic(file: string, text: string): void {
+  mkdirSync(dirname(file), { recursive: true });
+  const temp = `${file}.h7tmp-${process.pid}`;
+  writeFileSync(temp, text);
+  renameSync(temp, file);
+}
+
 const USAGE = 'usage: setup-files.ts agents <file> <body-file> [--replace] [--write] | claude <file> [--write] | exclude <file> [--write]';
 
-export function main(argv: string[], out: (text: string) => void, err: (text: string) => void): number {
+export function main(argv: string[], out: (text: string) => void, err: (text: string) => void, cwd: string = process.cwd()): number {
   const [cmd, file, bodyFile] = argv.filter((a) => !a.startsWith('--'));
   const flags = argv.filter((a) => a.startsWith('--'));
   if (file === undefined || (cmd === 'agents' && bodyFile === undefined) || !['agents', 'claude', 'exclude'].includes(cmd as string)) {
     err(USAGE);
     return 2;
   }
-  const existing = readOrNull(file);
+  for (const path of cmd === 'agents' ? [file, bodyFile as string] : [file]) {
+    const problem = pathProblem(path, cwd);
+    if (problem !== null) {
+      err(problem);
+      return 2;
+    }
+  }
+  const existing = readOrNull(resolve(cwd, file));
   let result: Result;
   if (cmd === 'agents') {
-    const body = readOrNull(bodyFile as string);
+    const body = readOrNull(resolve(cwd, bodyFile as string));
     if (body === null) {
       err(`cannot read ${bodyFile}`);
       return 2;
@@ -94,8 +128,7 @@ export function main(argv: string[], out: (text: string) => void, err: (text: st
   const changes = ['created', 'appended', 'updated'].includes(result.status);
   const written = changes && flags.includes('--write');
   if (written) {
-    mkdirSync(dirname(file), { recursive: true });
-    writeFileSync(file, result.text);
+    writeAtomic(resolve(cwd, file), result.text);
   }
   out(JSON.stringify({ file, status: result.status, written, lines: lines(result.text), ...(result.existing === undefined ? {} : { existing: result.existing }) }));
   return 0;

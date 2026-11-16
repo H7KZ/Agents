@@ -1,9 +1,9 @@
 import assert from 'node:assert/strict';
-import { existsSync, readFileSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdirSync, readFileSync, symlinkSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { describe, it } from 'node:test';
 import fc from 'fast-check';
-import { BEGIN, END, ensureExclude, ensureImport, main, upsertBlock } from '../../plugins/h7/scripts/setup-files.ts';
+import { BEGIN, END, ensureExclude, ensureImport, main, pathProblem, upsertBlock } from '../../plugins/h7/scripts/setup-files.ts';
 import { cleanupTmp, runNode, SLOW, tmpDir, writeTree } from '../../scripts/test/helpers.ts';
 
 cleanupTmp();
@@ -69,6 +69,17 @@ describe('upsertBlock', () => {
   });
 });
 
+describe('pathProblem', () => {
+  it('refuses symlinks via lstat and passes regular files and missing paths', () => {
+    const root = tmpDir();
+    assert.match(pathProblem('AGENTS.md', root, () => ({ isSymbolicLink: () => true })) as string, /symlink/);
+    assert.equal(pathProblem('AGENTS.md', root, () => ({ isSymbolicLink: () => false })), null);
+    assert.equal(pathProblem('AGENTS.md', root, () => null), null);
+    assert.equal(pathProblem('a/b/c', root), null);
+    assert.match(pathProblem('..', root) as string, /outside/);
+  });
+});
+
 describe('ensureImport and ensureExclude', () => {
   it('claude: creates, appends, keeps content, is idempotent', () => {
     assert.deepEqual(ensureImport(null), { status: 'created', text: '@AGENTS.md\n' });
@@ -91,14 +102,15 @@ describe('ensureImport and ensureExclude', () => {
 });
 
 describe('main', () => {
-  const run = (argv: string[]) => {
+  let cwd = tmpDir();
+  const run = (argv: string[], at: string = cwd) => {
     let out = '';
     let err = '';
-    const code = main(argv, (t) => (out += t), (t) => (err += t));
+    const code = main(argv, (t) => (out += t), (t) => (err += t), at);
     return { code, out, err };
   };
   it('plans without writing, then writes', () => {
-    const dir = tmpDir();
+    const dir = (cwd = tmpDir());
     writeTree(dir, { 'body.md': 'rules', 'AGENTS.md': '# Mine\n' });
     const file = join(dir, 'AGENTS.md');
     const plan = run(['agents', file, join(dir, 'body.md')]);
@@ -112,7 +124,7 @@ describe('main', () => {
     assert.equal(JSON.parse(run(['agents', file, join(dir, 'body.md'), '--replace', '--write']).out).status, 'updated');
   });
   it('creates parent dirs for new files; claude and exclude subcommands', () => {
-    const dir = tmpDir();
+    const dir = (cwd = tmpDir());
     const claude = join(dir, 'CLAUDE.md');
     assert.equal(JSON.parse(run(['claude', claude, '--write']).out).status, 'created');
     assert.equal(readFileSync(claude, 'utf8'), '@AGENTS.md\n');
@@ -121,22 +133,45 @@ describe('main', () => {
     assert.ok(existsSync(exclude));
     assert.equal(JSON.parse(run(['exclude', exclude, '--write']).out).status, 'unchanged');
   });
+  it('refuses relative paths that escape the repo and leaves no temp files', () => {
+    cwd = tmpDir();
+    const other = tmpDir();
+    const r = run(['exclude', join(other, 'x')]);
+    assert.equal(r.code, 2);
+    assert.match(r.err, /outside the repo/);
+    assert.equal(existsSync(join(other, 'x')), false);
+    assert.equal(run(['exclude', '../escape']).code, 2);
+    assert.equal(run(['agents', 'AGENTS.md', join(other, 'body.md')]).code, 2);
+    run(['exclude', 'e', '--write']);
+    assert.deepEqual(readFileSync(join(cwd, 'e'), 'utf8'), '.h7/' + String.fromCharCode(10));
+  });
+  it('refuses a directory junction that points outside the repo', () => {
+    cwd = tmpDir();
+    const other = tmpDir();
+    symlinkSync(other, join(cwd, 'link'), 'junction');
+    const r = run(['exclude', 'link/exclude', '--write']);
+    assert.equal(r.code, 2);
+    assert.equal(existsSync(join(other, 'exclude')), false);
+    mkdirSync(join(cwd, 'sub'));
+    assert.equal(run(['exclude', 'sub/new/deep', '--write']).code, 0);
+  });
   it('rejects bad usage and unreadable body', () => {
     assert.equal(run([]).code, 2);
     assert.equal(run(['agents', 'x']).code, 2);
     assert.equal(run(['nope', 'x']).code, 2);
     assert.match(run(['agents', 'x']).err, /usage/);
-    const r = run(['agents', join(tmpDir(), 'a.md'), join(tmpDir(), 'missing.md')]);
+    cwd = tmpDir();
+    const r = run(['agents', join(cwd, 'a.md'), join(cwd, 'missing.md')]);
     assert.equal(r.code, 2);
     assert.match(r.err, /cannot read/);
   });
   it('runs as a script', { ...SLOW }, () => {
     const dir = tmpDir();
     const script = join(import.meta.dirname, '../../plugins/h7/scripts/setup-files.ts');
-    const ok = runNode(script, ['exclude', join(dir, 'e')]);
+    const ok = runNode(script, ['exclude', 'e'], { cwd: dir });
     assert.equal(ok.status, 0);
     assert.equal(JSON.parse(ok.stdout).status, 'created');
-    const bad = runNode(script, []);
+    const bad = runNode(script, [], { cwd: dir });
     assert.equal(bad.status, 2);
     assert.match(bad.stderr, /usage/);
   });
