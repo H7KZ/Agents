@@ -61,7 +61,7 @@ export function lintSkill(skillDir: string, pluginDir: string): Problem[] {
   if (!existsSync(file)) return [{ file, line: 1, message: 'SKILL.md is missing' }];
   const text = readFileSync(file, 'utf8');
   const problems: Problem[] = [];
-  const total = text.split(/\r?\n/).length;
+  const total = text.replace(/\r?\n$/, '').split(/\r?\n/).length;
   if (total > MAX_LINES) {
     problems.push({ file, line: MAX_LINES + 1, message: `file has ${total} lines, limit is ${MAX_LINES}` });
   }

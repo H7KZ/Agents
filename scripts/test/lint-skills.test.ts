@@ -88,13 +88,15 @@ describe('lintSkill', () => {
     assert.deepEqual(messages(make(1025)), ['3:description is 1025 chars, limit is 1024']);
   });
 
-  it('enforces the line limit exactly at 500', () => {
-    const base = good();
-    const baseLines = base.split('\n').length;
-    const exact = base + '\n'.repeat(500 - baseLines);
-    assert.equal(exact.split('\n').length, 500);
-    assert.deepEqual(messages(plugin({ 'skills/alpha/SKILL.md': exact })), []);
-    assert.deepEqual(messages(plugin({ 'skills/alpha/SKILL.md': exact + '\n' })), ['501:file has 501 lines, limit is 500']);
+  it('enforces the line limit exactly at 500, with or without a trailing newline', () => {
+    const header = good().trimEnd().split('\n');
+    const file = (lines: number, eol: string, trailing: boolean) => header.concat(Array(lines - header.length).fill('x')).join(eol) + (trailing ? eol : '');
+    for (const eol of ['\n', '\r\n']) {
+      for (const trailing of [true, false]) {
+        assert.deepEqual(messages(plugin({ 'skills/alpha/SKILL.md': file(500, eol, trailing) })), [], `500 ${JSON.stringify(eol)} ${trailing}`);
+        assert.deepEqual(messages(plugin({ 'skills/alpha/SKILL.md': file(501, eol, trailing) })), ['501:file has 501 lines, limit is 500']);
+      }
+    }
   });
 
   it('reports dangling links and paths with line numbers, ignoring fenced links', () => {
