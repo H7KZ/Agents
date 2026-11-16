@@ -22,7 +22,7 @@ describe('deploy and publish commands', () => {
       ['npm.cmd publish', ASK],
       ['npm -w pkg publish', ASK],
       ['npm install', null],
-      ['npm run publish-docs', null],
+      ['npm run publish-docs', ASK],
       ['npm test', null],
       ['pnpm install', null],
       ['yarn', null],

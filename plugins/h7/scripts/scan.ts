@@ -1,30 +1,73 @@
 import { assignmentsOf, nestedScript, parseSimple, type Simple } from './command.ts';
-import { evaluateDelete, isDeleter } from './rules-delete.ts';
+import { evaluateDelete, evaluateFind, isDeleter } from './rules-delete.ts';
 import { evaluateDeploy } from './rules-deploy.ts';
-import { evaluateGit, parseGitCall } from './rules-git.ts';
+import { aliasDefinitions, applyGitEffects, evaluateGit, parseGitCall, type GitCall } from './rules-git.ts';
+import { evaluateIndirection, type Flow } from './rules-indirect.ts';
 import { tokenize, type Dialect } from './tokenize.ts';
-import { ask, type Ctx, type Decision } from './types.ts';
+import { ask, cloneState, type Ctx, type Decision, type ScanState } from './types.ts';
 
-export interface ScanState {
-  cwd: string;
-  env: Record<string, string>;
-}
+export type { ScanState } from './types.ts';
 
 const MAX_DEPTH = 6;
+const MAX_CWDS = 8;
 const DIRECTORY_CHANGERS = new Set(['cd', 'chdir', 'pushd', 'set-location', 'sl']);
 const ENV_SETTERS = new Set(['export', 'set', 'declare', 'typeset', 'readonly']);
+const LEAVERS = new Set(['exit', 'return']);
 
-function evaluateSimple(simple: Simple, env: Record<string, string>, cwd: string, ctx: Ctx): Decision | null {
-  if (simple.name === 'git') return evaluateGit(parseGitCall(simple.argv, cwd, env, ctx), ctx);
-  if (isDeleter(simple.name)) return evaluateDelete(simple, cwd, ctx);
-  return evaluateDeploy(simple);
-}
+const isPipe = (op: string): boolean => op.endsWith('|') && !op.endsWith('||');
 
-function changeDirectory(simple: Simple, state: ScanState, ctx: Ctx): void {
+function changeDirectory(simple: Simple, state: ScanState, ctx: Ctx, mayFail: boolean): void {
   const target = simple.argv.find((arg) => !arg.startsWith('-') || arg === '-') ?? '~';
   if (target === '-') return;
-  const expanded = ctx.paths.expand(target, ctx.home);
-  if (expanded !== null && expanded !== '') state.cwd = ctx.paths.resolve(state.cwd, expanded);
+  const expanded = ctx.paths.expand(target, ctx.home, ctx.tmp.vars);
+  if (expanded === null || expanded === '') return;
+  const before = [state.cwd, ...state.alt];
+  const after = before.map((dir) => ctx.paths.resolve(dir, expanded));
+  const all = [...new Set(mayFail ? [...after, ...before] : after)].slice(0, MAX_CWDS);
+  state.cwd = all[0] as string;
+  state.alt = all.slice(1);
+}
+
+function gitDecisions(simple: Simple, state: ScanState, ctx: Ctx, scanNested: (script: string, kind: Dialect) => Decision[]): Decision[] {
+  const env = { ...state.env, ...simple.env };
+  const found: Decision[] = [];
+  const primary = parseGitCall(simple.argv, state.cwd, env, ctx, state);
+  const calls: GitCall[] = [primary, ...state.alt.map((cwd) => parseGitCall(simple.argv, cwd, env, ctx, state))];
+  for (const call of calls) {
+    const decision = evaluateGit(call, ctx);
+    if (decision) found.push(decision);
+  }
+  for (const { value } of aliasDefinitions(primary)) {
+    found.push(...scanNested(value.startsWith('!') ? value.slice(1) : `git ${value}`, 'sh'));
+    found.push(ask('git-alias', 'This defines a git alias; aliases can hide dangerous commands from the guard. Confirm with the user.'));
+  }
+  if (primary.shell !== null) found.push(...scanNested(primary.shell, 'sh'));
+  applyGitEffects(primary, ctx);
+  return found;
+}
+
+function evaluateSimple(simple: Simple, state: ScanState, ctx: Ctx, flow: Flow, scanNested: (script: string, kind: Dialect) => Decision[]): Decision[] {
+  const found: Decision[] = [];
+  const indirect = evaluateIndirection(simple, flow);
+  if (indirect) found.push(indirect);
+  const cwds = [state.cwd, ...state.alt];
+  if (simple.name === 'git') {
+    found.push(...gitDecisions(simple, state, ctx, scanNested));
+  } else if (isDeleter(simple.name)) {
+    for (const cwd of cwds) {
+      const decision = evaluateDelete(simple, cwd, ctx, flow.piped);
+      if (decision) found.push(decision);
+    }
+  } else if (simple.name === 'find') {
+    for (const cwd of cwds) {
+      const decision = evaluateFind(simple, cwd, ctx);
+      if (decision) found.push(decision);
+    }
+  } else {
+    const decision = evaluateDeploy(simple);
+    if (decision) found.push(decision);
+  }
+  return found;
 }
 
 export function scan(command: string, dialect: Dialect, ctx: Ctx, state: ScanState, depth = 0): Decision[] {
@@ -33,23 +76,34 @@ export function scan(command: string, dialect: Dialect, ctx: Ctx, state: ScanSta
   }
   const tokens = tokenize(command, dialect);
   const found: Decision[] = [];
-  const scanNested = (script: string, kind: Dialect): void => {
-    found.push(...scan(script, kind, ctx, { cwd: state.cwd, env: { ...state.env } }, depth + 1));
-  };
-  for (const words of tokens.segments) {
+  const scanNested = (script: string, kind: Dialect): Decision[] => scan(script, kind, ctx, cloneState(state), depth + 1);
+  const saved: { depth: number; state: ScanState }[] = [];
+  let previousDepth = 0;
+  tokens.segments.forEach((words, index) => {
+    const level = tokens.depths[index] as number;
+    while (saved.length > 0 && level < (saved[saved.length - 1] as { depth: number }).depth) {
+      Object.assign(state, (saved.pop() as { state: ScanState }).state);
+    }
+    for (let entering = previousDepth + 1; entering <= level; entering++) saved.push({ depth: entering, state: cloneState(state) });
+    previousDepth = level;
+    const op = tokens.ops[index] as string;
     const simple = parseSimple(words);
     if (simple.name === '') {
       Object.assign(state.env, simple.env);
-      continue;
+      return;
     }
-    const decision = evaluateSimple(simple, { ...state.env, ...simple.env }, state.cwd, ctx);
-    if (decision) found.push(decision);
+    const flow: Flow = { piped: isPipe(op), input: tokens.inputs[index] as boolean, call: tokens.calls[index] as boolean, powershell: dialect === 'ps' };
+    found.push(...evaluateSimple(simple, state, ctx, flow, scanNested));
     const inner = nestedScript(simple);
-    if (inner) scanNested(inner.script, inner.dialect);
-    if (DIRECTORY_CHANGERS.has(simple.name)) changeDirectory(simple, state, ctx);
+    if (inner) found.push(...scanNested(inner.script, inner.dialect));
+    if (LEAVERS.has(simple.name)) state.alt = [];
+    if (DIRECTORY_CHANGERS.has(simple.name)) {
+      const next = tokens.ops[index + 1] ?? '';
+      changeDirectory(simple, state, ctx, op.includes('||') || next.includes('||'));
+    }
     if (ENV_SETTERS.has(simple.name)) Object.assign(state.env, assignmentsOf(simple));
-  }
-  for (const script of tokens.nested) scanNested(script, dialect);
+  });
+  for (const script of tokens.nested) found.push(...scanNested(script, dialect));
   return found;
 }
 

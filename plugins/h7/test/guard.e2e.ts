@@ -1,5 +1,5 @@
 import assert from 'node:assert/strict';
-import { readFileSync, symlinkSync, writeFileSync } from 'node:fs';
+import { mkdirSync, readFileSync, symlinkSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { describe, it } from 'node:test';
 import { cleanupTmp, git, initRepo, runNode, tmpDir } from '../../../scripts/test/helpers.ts';
@@ -26,6 +26,8 @@ const logLines = (home: string): Record<string, string>[] =>
   readFileSync(join(home, '.h7', 'guard.log'), 'utf8').trim().split('\n').map((l) => JSON.parse(l));
 
 describe('guard.ts as a hook subprocess', () => {
+  const decision = (run: Run): string => (run.status === 2 ? 'block' : run.stdout.includes('"ask"') ? 'ask' : 'allow');
+
   it('allows ordinary commands with no output and no log', () => {
     const repo = initRepo(tmpDir());
     const run = guard('git status && ls', repo);
@@ -68,7 +70,9 @@ describe('guard.ts as a hook subprocess', () => {
     const run = guard('git reset --hard', repo);
     assert.equal(run.status, 2);
     assert.match(run.stderr, /destructive-git-dirty/);
-    assert.equal(guard('git -C . stash drop', repo).status, 2);
+    const drop = guard('git -C . stash drop', repo);
+    assert.equal(drop.status, 0);
+    assert.match(drop.stdout, /git-stash-drop/);
     assert.equal(guard('git status', repo).status, 0);
   });
 
@@ -86,11 +90,11 @@ describe('guard.ts as a hook subprocess', () => {
 
   it('blocks git add of untracked secrets via broad adds but ignores gitignored ones', () => {
     const repo = initRepo(tmpDir());
-    writeFileSync(join(repo, 'server.pem'), 'k\n');
+    writeFileSync(join(repo, 'server.key'), 'k\n');
     assert.equal(guard('git add .', repo).status, 2);
-    writeFileSync(join(repo, '.gitignore'), '*.pem\n');
+    writeFileSync(join(repo, '.gitignore'), '*.key\n');
     assert.equal(guard('git add .', repo).status, 0);
-    assert.equal(guard('git add server.pem', repo).status, 2);
+    assert.equal(guard('git add server.key', repo).status, 2);
   });
 
   it('confines recursive deletes to the repository root', () => {
@@ -150,5 +154,56 @@ describe('guard.ts as a hook subprocess', () => {
     const result = runNode(script, [], { input, env: { H7_HOME: undefined, HOME: home, USERPROFILE: home } });
     assert.equal(result.status, 2);
     assert.equal(logLines(home)[0]?.rule, 'force-push-protected');
+  });
+
+  it('git failures inside a repository ask instead of reporting clean', () => {
+    const repo = initRepo(tmpDir());
+    writeFileSync(join(repo, 'a.txt'), 'x\n');
+    git(repo, 'add', 'a.txt');
+    git(repo, 'commit', '-q', '-m', 'a');
+    writeFileSync(join(repo, 'a.txt'), 'edited\n');
+    assert.equal(decision(guard('git reset --hard', repo)), 'block');
+    writeFileSync(join(repo, '.git', 'index'), 'garbage');
+    assert.equal(decision(guard('git reset --hard', repo)), 'ask');
+    assert.equal(decision(guard('git commit -m x', repo)), 'ask');
+  });
+
+  it('untracked files do not block reset --hard but do block git clean', () => {
+    const repo = initRepo(tmpDir());
+    writeFileSync(join(repo, 'new.log'), 'x\n');
+    assert.equal(decision(guard('git reset --hard', repo)), 'allow');
+    assert.equal(decision(guard('git checkout .', repo)), 'allow');
+    assert.equal(decision(guard('git clean -fd', repo)), 'block');
+    assert.equal(decision(guard('git stash push -u && git clean -fd', repo)), 'allow');
+  });
+
+  it('git checkout of paths on a modified tree is blocked, branch switches are not', () => {
+    const repo = initRepo(tmpDir());
+    writeFileSync(join(repo, 'README.md'), 'edited\n');
+    git(repo, 'branch', 'other');
+    assert.equal(decision(guard('git checkout README.md', repo)), 'block');
+    assert.equal(decision(guard('git checkout HEAD README.md', repo)), 'block');
+    assert.equal(decision(guard('git checkout other', repo)), 'allow');
+  });
+
+  it('secret pathspecs are matched from a subdirectory, globs and ignored files included', () => {
+    const repo = initRepo(tmpDir());
+    mkdirSync(join(repo, 'sub'));
+    writeFileSync(join(repo, '.env'), 'T=1\n');
+    writeFileSync(join(repo, 'sub', '.env'), 'T=1\n');
+    writeFileSync(join(repo, 'sub', 'notes.txt'), 'x\n');
+    const sub = join(repo, 'sub');
+    for (const command of ['git add ../.env', 'git add .env', 'git add :/.env', "git add '.e*'", "git add '../.e*'", 'git add -A', 'git add :/', 'git add .']) {
+      assert.equal(decision(guard(command, sub)), 'block', command);
+    }
+    assert.equal(decision(guard('git add notes.txt', sub)), 'allow');
+    git(repo, 'rm', '-q', '--cached', '-r', '.', '--ignore-unmatch');
+    writeFileSync(join(repo, '.gitignore'), ['.env', 'sub/.env', ''].join(String.fromCharCode(10)));
+    assert.equal(decision(guard('git add -f .', repo)), 'block');
+    assert.equal(decision(guard('git add .', repo)), 'allow');
+    git(repo, 'add', '.gitignore');
+    git(repo, 'commit', '-q', '-m', 'ignore');
+    writeFileSync(join(repo, 'README.md'), 'edited\n');
+    assert.equal(decision(guard('git commit -a -m x', sub)), 'allow');
   });
 });

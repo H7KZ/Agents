@@ -263,3 +263,24 @@ describe('tokenize: properties', () => {
     );
   });
 });
+
+describe('tokenize: structure metadata', () => {
+  it('records the separator before each segment', () => {
+    const t = tokenize('a && b || c; d | e\nf & g');
+    assert.deepEqual(t.ops, ['', '&&', '||', ';', '|', '\n', '&']);
+    assert.deepEqual(tokenize('a\n\n\nb').ops, ['', '\n\n\n']);
+  });
+
+  it('tracks subshell depth and never goes negative', () => {
+    const t = tokenize('(cd x; (ls)); rm');
+    assert.deepEqual(t.segments, [['cd', 'x'], ['ls'], ['rm']]);
+    assert.deepEqual(t.depths, [1, 2, 0]);
+    assert.deepEqual(tokenize(') a').depths, [0]);
+    assert.deepEqual(tokenize('echo $(cd x) y').depths, [0]);
+  });
+
+  it('flags segments that read stdin from heredocs, here-strings or files', () => {
+    assert.deepEqual(tokenize('bash <<X\nls\nX\nbash <<< "ls"\nsh < f\necho hi > out\nsh <&3\ncat').inputs, [true, true, true, false, false, false]);
+    assert.deepEqual(tokenize('a | sh').inputs, [false, false]);
+  });
+});

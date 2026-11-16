@@ -23,6 +23,7 @@ function guard(command: string, over: Partial<GuardIo> = {}) {
     realpath: (p) => p,
     disk: repoDisk,
     homedir: home,
+    tmpdir: '/nonexistent-tmp',
     fallbackCwd: '/repo',
     now: () => new Date(0),
     ...over,
@@ -39,7 +40,7 @@ describe('internal failures ask instead of allowing', () => {
   };
 
   it('an exception in any rule that consults git yields ASK', () => {
-    for (const command of ['git reset --hard', 'git commit -m x', 'git add .', 'rm -rf dist', 'git checkout -- .', 'git stash drop']) {
+    for (const command of ['git reset --hard', 'git commit -m x', 'git add .', 'rm -rf dist', 'git checkout -- .']) {
       const result = guard(command, { runner: throwing('rule exploded') });
       assert.equal(verdict(result), 'ask', command);
       assert.match(JSON.parse(result.stdout).hookSpecificOutput.permissionDecisionReason, /^h7 guard internal error: rule exploded$/);

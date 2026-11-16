@@ -1,11 +1,11 @@
 import { realpathSync } from 'node:fs';
-import { homedir } from 'node:os';
+import { homedir, tmpdir } from 'node:os';
 import { createGit, spawnRunner, type Runner } from './git.ts';
-import type { Disk } from './gitfiles.ts';
+import { realDisk, type Disk } from './gitfiles.ts';
 import { appendDisabledOnce, appendLog, type LogEntry } from './log.ts';
 import { makePaths, type Realpath } from './paths.ts';
 import { pickDecision, scan } from './scan.ts';
-import type { Ctx, Decision } from './types.ts';
+import { newState, type Ctx, type Decision } from './types.ts';
 
 export interface Deps {
   /** Filesystem view; defaults to the real disk. */
@@ -14,6 +14,7 @@ export interface Deps {
   runner: Runner;
   realpath: Realpath;
   homedir: string;
+  tmpdir: string;
   fallbackCwd: string;
   now: () => Date;
 }
@@ -77,8 +78,20 @@ export function run(stdinText: string, env: Record<string, string | undefined>, 
     }
     command = text;
     cwd = typeof input.cwd === 'string' && input.cwd !== '' ? input.cwd : io.fallbackCwd;
-    const ctx: Ctx = { cwd, home, paths: makePaths(io.platform === 'win32' ? 'win32' : 'posix', io.realpath), git: createGit(io.runner, io.disk) };
-    const decision = pickDecision(scan(command, input.tool_name === 'PowerShell' ? 'ps' : 'sh', ctx, { cwd, env: {} }));
+    const platform = io.platform === 'win32' ? 'win32' : 'posix';
+    const paths = makePaths(platform, io.realpath);
+    const disk = io.disk ?? realDisk;
+    const vars: Record<string, string> = {};
+    for (const name of ['TMPDIR', 'TEMP', 'TMP']) {
+      const value = env[name];
+      if (value !== undefined && value !== '') vars[name] = value;
+    }
+    const posixTemp = platform === 'posix' ? ['/tmp', '/var/tmp'] : [];
+    const candidates = [...new Set([io.tmpdir, ...posixTemp, ...Object.values(vars)].map((dir) => paths.resolve(cwd, dir)))];
+    // A temp dir that contains the working directory or the home directory must not whitelist them.
+    const dirs = candidates.filter((dir) => !paths.isInside(dir, cwd) && !paths.isInside(dir, paths.resolve(cwd, home)));
+    const ctx: Ctx = { cwd, home, paths, git: createGit(io.runner, disk), disk, tmp: { dirs, vars } };
+    const decision = pickDecision(scan(command, input.tool_name === 'PowerShell' ? 'ps' : 'sh', ctx, newState(cwd)));
     if (decision === null) return ALLOW;
     return respond(decision, appendLog(home, entry(decision.decision, decision.rule, command, cwd)));
   } catch (error) {
@@ -94,6 +107,7 @@ export function defaultDeps(): Deps {
     runner: spawnRunner,
     realpath: realpathSync,
     homedir: homedir(),
+    tmpdir: tmpdir(),
     fallbackCwd: process.cwd(),
     now: () => new Date(),
   };

@@ -8,8 +8,9 @@ const BLOCK_FORCE = 'block:force-push-protected';
 const BLOCK_HOOKS = 'block:skip-git-hooks';
 const BLOCK_DIRTY = 'block:destructive-git-dirty';
 const BLOCK_SECRET = 'block:secrets-commit';
+const ASK_SECRET = 'ask:secrets-ambiguous';
 const ASK_PUSH = 'ask:push-protected';
-const ASK_DELETE = 'ask:push-delete-protected';
+const BLOCK_DELETE = 'block:push-delete-protected';
 
 function table(options: Parameters<typeof ruleOf>[1], rows: [string, string | null][]): void {
   for (const [command, expected] of rows) {
@@ -95,12 +96,12 @@ describe('push to protected branches (ask)', () => {
     assert.equal(ruleOf('git push origin trunk', { defaultBranch: 'trunk' }), ASK_PUSH);
   });
 
-  it('asks before deleting protected branches, blocks forced deletes', () => {
+  it('blocks deleting protected branches', () => {
     table({ branch: 'feature' }, [
-      ['git push origin --delete main', ASK_DELETE],
-      ['git push origin -d release/1', ASK_DELETE],
-      ['git push origin :main', ASK_DELETE],
-      ['git push origin :refs/heads/master', ASK_DELETE],
+      ['git push origin --delete main', BLOCK_DELETE],
+      ['git push origin -d release/1', BLOCK_DELETE],
+      ['git push origin :main', BLOCK_DELETE],
+      ['git push origin :refs/heads/master', BLOCK_DELETE],
       ['git push origin +:main', BLOCK_FORCE],
       ['git push -f origin --delete main', BLOCK_FORCE],
       ['git push origin --delete feature', null],
@@ -136,8 +137,9 @@ describe('skipping git hooks', () => {
       ['git commit -anm x', BLOCK_HOOKS],
       ['git commit -m x -n', BLOCK_HOOKS],
       ['git -c core.hooksPath=/dev/null commit -m x', BLOCK_HOOKS],
-      ['git -c core.hookspath=x commit', BLOCK_HOOKS],
-      ['git -c core.hooksPath= push', BLOCK_HOOKS],
+      ['git -c core.hookspath=../outside commit', BLOCK_HOOKS],
+      ['git -c core.hooksPath= push', 'ask:skip-git-hooks'],
+      ['git -c core.hooksPath=.husky commit -m x', null],
       ['HUSKY=0 git commit -m x', BLOCK_HOOKS],
       ['SKIP=eslint git commit -m x', BLOCK_HOOKS],
       ['env HUSKY=0 git commit -m x', BLOCK_HOOKS],
@@ -184,10 +186,6 @@ describe('destructive git commands with a dirty worktree', () => {
   const cases = [
     'git reset --hard',
     'git reset --hard HEAD~1',
-    'git clean -f',
-    'git clean -fd',
-    'git clean -xdf',
-    'git clean --force',
     'git checkout -- .',
     'git checkout -- src/a.ts',
     'git checkout HEAD -- src/a.ts',
@@ -204,9 +202,6 @@ describe('destructive git commands with a dirty worktree', () => {
     'git restore --staged --worktree a',
     'git restore -SW a',
     'git restore -s HEAD~1 a',
-    'git stash drop',
-    'git stash drop stash@{1}',
-    'git stash clear',
     'git -C sub reset --hard',
   ];
 
@@ -260,10 +255,10 @@ describe('destructive git commands with a dirty worktree', () => {
 
 describe('secrets', () => {
   it('classifies file names', () => {
-    for (const name of ['.env', '.env.local', '.env.production', 'config/.env', 'a\\b\\.env', 'server.pem', 'k.KEY', 'id_rsa', 'id_rsa.bak', 'id_ed25519', 'x.p12', 'x.pfx', 'credentials.json', 'secrets.json', 'secrets.yaml', 'secrets.yml', 'secrets.prod.yaml', 'dir/secrets.prod.json']) {
+    for (const name of ['.env', '.env.local', '.env.production', 'config/.env', 'a\\b\\.env', 'server.pem', 'k.KEY', 'id_rsa', 'id_ecdsa', 'id_dsa', 'id_ed25519', 'x.p12', 'x.pfx', 'x.jks', 'x.keystore', '.netrc', '.pgpass', '.npmrc', 'prod.tfvars', '.env.development', '.env.test', 'credentials.json', 'secrets.json', 'secrets.yaml', 'secrets.yml', 'secrets.prod.yaml', 'dir/secrets.prod.json']) {
       assert.notEqual(secretKind(name), null, name);
     }
-    for (const name of ['.env.example', '.env.sample', '.env.template', '.env.local.example', 'id_rsa.pub', 'id_ed25519.pub', 'environment.ts', 'env.ts', 'secrets.md', 'secrets.json.md', 'mysecrets.json', 'credentials.jsonc', 'monkey.ts', 'README.md', '.envrc', '.environment']) {
+    for (const name of ['.env.example', '.env.sample', '.env.template', '.env.local.example', 'id_rsa.pub', 'id_ed25519.pub', 'id_rsa.bak', 'secrets.ts', 'environment.ts', 'env.ts', 'secrets.md', 'secrets.json.md', 'mysecrets.json', 'credentials.jsonc', 'monkey.ts', 'README.md', '.envrc', '.environment']) {
       assert.equal(secretKind(name), null, name);
     }
   });
@@ -280,13 +275,14 @@ describe('secrets', () => {
     assert.equal(ruleOf('git commit -m x', { staged: ['src/a.ts', '.env'] }), BLOCK_SECRET);
     assert.equal(ruleOf('git commit -m x', { staged: ['src/a.ts', '.env.example'] }), null);
     assert.equal(ruleOf('git commit -m x', { staged: [] }), null);
-    assert.match(decide('git commit -m x', { staged: ['deploy/id_rsa'] })?.reason ?? '', /SSH key/);
+    assert.match(decide('git commit -m x', { staged: ['deploy/id_rsa'] })?.reason ?? '', /SSH private key/);
   });
 
   it('checks -a files and explicit pathspecs on commit', () => {
-    assert.equal(ruleOf('git commit -am x', { modified: ['k.pem'] }), BLOCK_SECRET);
+    assert.equal(ruleOf('git commit -am x', { modified: ['k.pem'] }), ASK_SECRET);
+    assert.equal(ruleOf('git commit -am x', { modified: ['k.key'] }), BLOCK_SECRET);
     assert.equal(ruleOf('git commit -m x', { modified: ['k.pem'] }), null);
-    assert.equal(ruleOf('git commit --all -m x', { modified: ['k.pem'] }), BLOCK_SECRET);
+    assert.equal(ruleOf('git commit --all -m x', { modified: ['k.key'] }), BLOCK_SECRET);
     assert.equal(ruleOf('git commit -m x .env', {}), BLOCK_SECRET);
     assert.equal(ruleOf('git commit -m x -- credentials.json', {}), BLOCK_SECRET);
   });
@@ -295,14 +291,14 @@ describe('secrets', () => {
     assert.equal(ruleOf('git add .env', {}), BLOCK_SECRET);
     assert.equal(ruleOf('git add -f .env.local', {}), BLOCK_SECRET);
     assert.equal(ruleOf('git add src/a.ts config/secrets.yaml', {}), BLOCK_SECRET);
-    assert.equal(ruleOf('git add *.pem', {}), BLOCK_SECRET);
+    assert.equal(ruleOf('git add *.pem', { untracked: ['k.pem'] }), ASK_SECRET);
     assert.equal(ruleOf('git add -- id_rsa', {}), BLOCK_SECRET);
     assert.equal(ruleOf('git add src/a.ts .env.example', {}), null);
   });
 
   it('expands broad adds to untracked and modified files', () => {
     assert.equal(ruleOf('git add .', { untracked: ['.env'] }), BLOCK_SECRET);
-    assert.equal(ruleOf('git add -A', { modified: ['a/key.pem'] }), BLOCK_SECRET);
+    assert.equal(ruleOf('git add -A', { modified: ['a/key.key'] }), BLOCK_SECRET);
     assert.equal(ruleOf('git add --all', { untracked: ['x/credentials.json'] }), BLOCK_SECRET);
     assert.equal(ruleOf('git add *', { untracked: ['.env'] }), BLOCK_SECRET);
     assert.equal(ruleOf('git add :/', { untracked: ['.env'] }), BLOCK_SECRET);

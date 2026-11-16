@@ -3,7 +3,10 @@ import { describe, it } from 'node:test';
 import fc from 'fast-check';
 import { assignmentsOf, commandName, nestedScript, parseArgs, parseSimple } from '../scripts/command.ts';
 
-const simple = (...words: string[]) => parseSimple(words);
+const simple = (...words: string[]) => {
+  const { raw: _raw, ...rest } = parseSimple(words);
+  return rest;
+};
 
 describe('commandName', () => {
   it('strips directories and executable extensions and lowercases', () => {
@@ -28,6 +31,12 @@ describe('parseSimple', () => {
     assert.deepEqual(simple('$env:SKIP', '=', 'lint', 'git', 'x'), { name: 'git', argv: ['x'], env: { SKIP: 'lint' } });
     assert.deepEqual(simple('$env:SKIP', '='), { name: '', argv: [], env: { SKIP: '' } });
     assert.deepEqual(simple('$env:SKIP', 'git'), { name: '$env:skip', argv: ['git'], env: {} });
+  });
+
+  it('keeps the command word as written, even through wrappers', () => {
+    assert.equal(parseSimple(['sudo', '$G', 'push']).raw, '$G');
+    assert.equal(parseSimple(['/usr/bin/GIT.exe', 'x']).raw, '/usr/bin/GIT.exe');
+    assert.equal(parseSimple(['A=1']).raw, '');
   });
 
   it('skips shell keywords', () => {
@@ -64,12 +73,12 @@ describe('parseSimple', () => {
 
 describe('assignmentsOf', () => {
   it('extracts assignments from arguments', () => {
-    assert.deepEqual(assignmentsOf({ name: 'export', argv: ['A=1', '-x', 'B=2=3', 'C'], env: {} }), { A: '1', B: '2=3' });
+    assert.deepEqual(assignmentsOf({ name: 'export', argv: ['A=1', '-x', 'B=2=3', 'C'], env: {}, raw: 'export' }), { A: '1', B: '2=3' });
   });
 });
 
 describe('nestedScript', () => {
-  const nest = (name: string, ...argv: string[]) => nestedScript({ name, argv, env: {} });
+  const nest = (name: string, ...argv: string[]) => nestedScript({ name, argv, env: {}, raw: name });
 
   it('finds bash -c style scripts in any flag position', () => {
     assert.deepEqual(nest('bash', '-c', 'git push -f'), { script: 'git push -f', dialect: 'sh' });

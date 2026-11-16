@@ -8,9 +8,12 @@ export interface Paths {
   isInside(root: string, target: string): boolean;
   same(a: string, b: string): boolean;
   isFsRoot(target: string): boolean;
-  expand(word: string, home: string): string | null;
+  /** Forward-slash path of target relative to root; empty for root itself, null when outside. */
+  relative(root: string, target: string): string | null;
+  expand(word: string, home: string, vars?: Record<string, string>): string | null;
 }
 
+const NAMED_VARIABLE = /\$\{(?:env:)?([A-Za-z_][A-Za-z0-9_]*)\}|\$(?:env:)?([A-Za-z_][A-Za-z0-9_]*)|%([A-Za-z_][A-Za-z0-9_]*)%/g;
 const HOME_VARIABLE = /\$\{(?:env:)?(?:HOME|USERPROFILE)\}|\$(?:env:)?(?:HOME|USERPROFILE)(?![A-Za-z0-9_])|%(?:USERPROFILE|HOME)%/gi;
 
 export function makePaths(platform: Platform, realpath: Realpath): Paths {
@@ -54,14 +57,23 @@ export function makePaths(platform: Platform, realpath: Realpath): Paths {
     return api.parse(resolved).root === resolved;
   };
 
-  const expand = (word: string, home: string): string | null => {
+  const lookup = (name: string, vars: Record<string, string>): string | undefined => {
+    const key = Object.keys(vars).find((k) => fold(k) === fold(name));
+    return key === undefined ? undefined : vars[key];
+  };
+
+  const expand = (word: string, home: string, vars: Record<string, string> = {}): string | null => {
     let s = word;
     if (s === '~' || s.startsWith('~/') || s.startsWith('~\\')) s = home + s.slice(1);
     s = s.replace(HOME_VARIABLE, () => home);
+    s = s.replace(NAMED_VARIABLE, (match, braced, bare, percent) => lookup(braced ?? bare ?? percent, vars) ?? match);
     if (/^~./.test(s) || /[$`]/.test(s)) return null;
     if (platform === 'win32' && /%[A-Za-z_][A-Za-z0-9_]*%/.test(s)) return null;
     return s;
   };
 
-  return { resolve, isInside, same, isFsRoot, expand };
+  const relative = (root: string, target: string): string | null =>
+    isInside(root, target) ? api.relative(api.resolve(root), api.resolve(target)).split(api.sep).join('/') : null;
+
+  return { resolve, isInside, same, isFsRoot, relative, expand };
 }

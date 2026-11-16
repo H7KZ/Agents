@@ -25,6 +25,7 @@ function io(over: Partial<GuardIo> & { command?: string; tool?: string; cwd?: un
     realpath: (p) => p,
     disk: repoDisk,
     homedir: '/nonexistent-home',
+    tmpdir: '/nonexistent-tmp',
     fallbackCwd: '/fallback',
     now: () => new Date('2026-02-03T04:05:06.000Z'),
     ...over,

@@ -3,6 +3,8 @@ import type { Dialect } from './tokenize.ts';
 export interface Simple {
   name: string;
   argv: string[];
+  /** The command word as written, before wrapper stripping and normalisation. */
+  raw: string;
   env: Record<string, string>;
 }
 
@@ -61,7 +63,7 @@ export function parseSimple(words: string[]): Simple {
   let i = 0;
   for (;;) {
     const word = words[i];
-    if (word === undefined) return { name: '', argv: [], env };
+    if (word === undefined) return { name: '', argv: [], env, raw: '' };
     const psAssign = PS_ENV_VARIABLE.exec(word);
     if (psAssign && words[i + 1] === '=') {
       env[psAssign[1] as string] = words[i + 2] ?? '';
@@ -83,7 +85,7 @@ export function parseSimple(words: string[]): Simple {
       i = skipWrapper(name, words, i + 1, env);
       continue;
     }
-    return { name, argv: words.slice(i + 1), env };
+    return { name, argv: words.slice(i + 1), env, raw: word };
   }
 }
 
@@ -132,6 +134,8 @@ export interface ParseSpec {
   valueShort?: string;
   attachedShort?: string;
   valueLong?: string[];
+  /** Canonical long options; unique GNU-style abbreviations (4+ characters, e.g. --no-ver) map onto them. */
+  vocab?: string[];
 }
 
 export interface ParsedArgs {
@@ -139,6 +143,13 @@ export interface ParsedArgs {
   options: Map<string, string>;
   positionals: string[];
   rest: string[];
+}
+
+export function canonicalLong(name: string, vocab: string[]): string {
+  if (name.length < 4 || vocab.includes(name)) return name;
+  // "--no-" and "--no" are not abbreviations of anything; "--no-v" is.
+  const stem = name.startsWith('--no') ? 6 : 4;
+  return name.length < stem ? name : (vocab.find((candidate) => candidate.startsWith(name)) ?? name);
 }
 
 export function parseArgs(args: string[], spec: ParseSpec = {}): ParsedArgs {
@@ -158,7 +169,7 @@ export function parseArgs(args: string[], spec: ParseSpec = {}): ParsedArgs {
       afterDashes = true;
     } else if (arg.startsWith('--')) {
       const eq = arg.indexOf('=');
-      const name = eq === -1 ? arg : arg.slice(0, eq);
+      const name = canonicalLong(eq === -1 ? arg : arg.slice(0, eq), spec.vocab ?? []);
       flags.push(name);
       if (eq !== -1) {
         options.set(name, arg.slice(eq + 1));

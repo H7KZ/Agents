@@ -3,6 +3,14 @@ export type Dialect = 'sh' | 'ps';
 export interface Tokenized {
   segments: string[][];
   nested: string[];
+  /** Separator characters seen before each segment (for example "&&", "||", "|", ";"). */
+  ops: string[];
+  /** Parenthesis (subshell) depth of each segment. */
+  depths: number[];
+  /** True when the segment reads stdin from a heredoc, here-string or file redirect. */
+  inputs: boolean[];
+  /** True when a PowerShell call operator (&) started the segment. */
+  calls: boolean[];
 }
 
 interface Heredoc {
@@ -19,6 +27,14 @@ export function tokenize(input: string, dialect: Dialect = 'sh'): Tokenized {
   const ps = dialect === 'ps';
   const segments: string[][] = [];
   const nested: string[] = [];
+  const ops: string[] = [];
+  const depths: number[] = [];
+  const inputs: boolean[] = [];
+  let opAccum = '';
+  let parenDepth = 0;
+  let segInput = false;
+  let segCall = false;
+  const calls: boolean[] = [];
   const heredocs: Heredoc[] = [];
   let segment: string[] = [];
   let current: string | null = null;
@@ -45,6 +61,7 @@ export function tokenize(input: string, dialect: Dialect = 'sh'): Tokenized {
     if (!wasQuoted) {
       const redirect = REDIRECT.exec(word);
       if (redirect) {
+        if (redirect[1] === '<' || redirect[1] === '<<<') segInput = true;
         dropNext = redirect[2] === '';
         return;
       }
@@ -55,7 +72,16 @@ export function tokenize(input: string, dialect: Dialect = 'sh'): Tokenized {
   const endSegment = (): void => {
     flush();
     dropNext = false;
-    if (segment.length > 0) segments.push(segment);
+    if (segment.length > 0) {
+      segments.push(segment);
+      ops.push(opAccum);
+      depths.push(parenDepth);
+      inputs.push(segInput);
+      calls.push(segCall);
+      opAccum = '';
+    }
+    segInput = false;
+    segCall = false;
     segment = [];
   };
 
@@ -237,6 +263,7 @@ export function tokenize(input: string, dialect: Dialect = 'sh'): Tokenized {
     const next = input[i + 1];
     if (c === '\n') {
       endSegment();
+      opAccum += c;
       i++;
       if (heredocs.length > 0) i = consumeHeredocs(i);
     } else if (c === ' ' || c === '\t' || c === '\r') {
@@ -292,14 +319,18 @@ export function tokenize(input: string, dialect: Dialect = 'sh'): Tokenized {
       i++;
     } else if (c === ';' || c === '|' || c === '(' || c === ')') {
       endSegment();
+      opAccum += c;
+      if (c === '(') parenDepth++;
+      if (c === ')') parenDepth = Math.max(0, parenDepth - 1);
       i++;
     } else if (c === '&') {
       if (next === '>' || (current !== null && (input[i - 1] === '>' || input[i - 1] === '<'))) {
         append('&');
       } else if (ps && current === null && segment.length === 0 && next !== '&') {
-        // PowerShell call operator, not a separator
+        segCall = true;
       } else {
         endSegment();
+        opAccum += c;
       }
       i++;
     } else if (ps && (c === '{' || c === '}')) {
@@ -313,6 +344,7 @@ export function tokenize(input: string, dialect: Dialect = 'sh'): Tokenized {
       i++;
     } else if (!ps && c === '<' && next === '<' && input[i + 2] !== '<' && input[i - 1] !== '<') {
       flush();
+      segInput = true;
       i = readHeredocDelimiter(i + 2);
     } else if (ps && c === '@' && current === null && (next === "'" || next === '"') && PROBE.test(input.slice(i + 2, i + 2 + 40))) {
       i = readHereString(i);
@@ -322,5 +354,5 @@ export function tokenize(input: string, dialect: Dialect = 'sh'): Tokenized {
     }
   }
   endSegment();
-  return { segments, nested };
+  return { segments, nested, ops, depths, inputs, calls };
 }

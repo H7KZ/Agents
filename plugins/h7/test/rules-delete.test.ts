@@ -6,6 +6,7 @@ import { decide, ruleOf, type Options } from './support.ts';
 
 const BLOCK = 'block:recursive-delete';
 const ASK = 'ask:recursive-delete-unresolved';
+const BROAD = 'ask:recursive-delete-broad';
 
 function table(options: Options, rows: [string, string | null][]): void {
   for (const [command, expected] of rows) {
@@ -64,14 +65,14 @@ describe('recursive force delete on posix', () => {
       ['rm -rf ~/*', BLOCK],
       ['rm -rf $HOME/*', BLOCK],
       ['rm -rf ~/.config/*', BLOCK],
-      ['rm -rf *', BLOCK],
-      ['rm -rf ./*', BLOCK],
-      ['rm -rf .*', BLOCK],
-      ['rm -rf **', BLOCK],
-      ['rm -rf *.*', BLOCK],
+      ['rm -rf *', BROAD],
+      ['rm -rf ./*', BROAD],
+      ['rm -rf .*', BROAD],
+      ['rm -rf **', BROAD],
+      ['rm -rf *.*', BROAD],
       ['rm -rf /etc/*', BLOCK],
       ['rm -rf ../*', BLOCK],
-      ['rm -rf /repo/*', BLOCK],
+      ['rm -rf /repo/*', BROAD],
       ['rm -rf ?', null],
       ['rm -rf [ab]', null],
       ['rm -rf /tmp/a?b', BLOCK],
@@ -100,12 +101,12 @@ describe('recursive force delete on posix', () => {
     ]);
   });
 
-  it('requires both recursive and force', () => {
+  it('treats rm -r as a recursive delete, but plain rm and rm -f as safe', () => {
     table({}, [
-      ['rm -r /tmp/x', null],
+      ['rm -r /tmp/x', BLOCK],
       ['rm -f /tmp/x', null],
       ['rm /tmp/x', null],
-      ['rm -rf', null],
+      ['rm -rf', ASK],
       ['rm -i /tmp/x', null],
       ['rm - /tmp/x', null],
       ['rm --verbose -f /tmp/x', null],
@@ -267,7 +268,7 @@ describe('PowerShell Remove-Item', () => {
       ['Remove-Item C:\\x', null],
       ['Remove-Item -Path', null],
       ['Remove-Item -Path:', null],
-      ['Remove-Item -:x -Recurse -Force', null],
+      ['Remove-Item -:x -Recurse -Force', ASK],
     ]);
   });
 

@@ -3,7 +3,7 @@ import assert from 'node:assert/strict';
 import { describe, it } from 'node:test';
 import fc from 'fast-check';
 import { pickDecision, scan } from '../scripts/scan.ts';
-import { ask, block } from '../scripts/types.ts';
+import { ask, block, newState } from '../scripts/types.ts';
 import { decide, makeCtx, ruleOf } from './support.ts';
 
 describe('pickDecision', () => {
@@ -60,7 +60,7 @@ describe('scan', () => {
     fc.assert(
       fc.property(soup, fc.constantFrom('sh' as const, 'ps' as const), (text, dialect) => {
         const ctx = makeCtx();
-        scan(text, dialect, ctx, { cwd: ctx.cwd, env: {} });
+        scan(text, dialect, ctx, newState(ctx.cwd));
       }),
       { numRuns: runs(800) },
     );
