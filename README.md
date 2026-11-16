@@ -13,16 +13,26 @@ stale duplicate mattpocock copies (it lists them and asks first; `--yes` skips t
 
 ```powershell
 # Windows (PowerShell)
-git clone https://github.com/H7KZ/Agents.git; ./Agents/bootstrap/install.ps1
+git clone https://github.com/H7KZ/Agents.git; powershell -ExecutionPolicy Bypass -File Agents\bootstrap\install.ps1
 ```
 
 ```sh
 # macOS / Linux
-git clone https://github.com/H7KZ/Agents.git && ./Agents/bootstrap/install.sh
+git clone https://github.com/H7KZ/Agents.git && sh Agents/bootstrap/install.sh
 ```
 
-Options: `--dry-run` (print only), `--local <path>` (add the marketplace from a local clone, for authoring), `--yes`.
-It is idempotent and backs up `~/.claude/settings.json` to `settings.json.h7bak` before changing it.
+Options: `--dry-run` (print only), `--dev <repo>` (authoring machine, live edits, see below), `--local <path>` (add the
+marketplace from a local clone; a copy, not live), `--yes`. It is idempotent and copies the original
+`~/.claude/settings.json` to `settings.json.h7bak` (once, before any `claude` command touches it). It adds
+`claude-plugins-official` first when that marketplace is unknown, since `mattpocock-skills` comes from there.
+
+### Authoring machine: live edits
+
+A directory marketplace (`--local`) does NOT give live edits: Claude Code copies the plugin into its cache
+(`plugins/cache/h7kz/h7/<sha>`). Use `--dev <repo>` instead. It links `<repo>/plugins/h7` into `~/.claude/skills/h7`
+(a directory junction on Windows, no admin needed), which Claude Code loads in place as `h7@skills-dir`. No marketplace is
+added for h7 and `h7@h7kz` is uninstalled, otherwise h7 and its hook would load twice. Run `/reload-plugins` after edits.
+Evidence: [ADR 0003](docs/adr/0003-sync-marketplace-plugin.md). `/h7:doctor` reports which mode is active and fails if both are.
 
 Without the bootstrap: `claude plugin marketplace add H7KZ/Agents` then `claude plugin install h7@h7kz`.
 

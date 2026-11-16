@@ -12,7 +12,7 @@ plugins/h7/hooks/hooks.json       PreToolUse safety guard (exec form: node + arg
 plugins/h7/scripts/*.ts           runtime code (guard, doctor, helpers)
 plugins/h7/skills/<name>/SKILL.md user-invoked skills (/h7:<name>)
 test/plugin/                      node:test suites (*.test.ts fast, *.e2e.ts slow subprocess)
-bootstrap/                        install.ps1, install.sh, configure.ts (+ test/)
+bootstrap/                        install.ps1, install.sh, configure.ts (+ test/); --dev links plugins/h7 for live edits
 scripts/                          repo tooling: lint-skills.ts, check-manifests.ts (+ test/)
 ```
 
@@ -62,7 +62,9 @@ scripts/                          repo tooling: lint-skills.ts, check-manifests.
 | Non-git commands never spawn git | `test/plugin/failsafe.test.ts` |
 | Guard log has no secrets, private permissions | `test/plugin/log.test.ts` (property test) |
 | Git is run safely in untrusted repos | `test/plugin/git.test.ts` |
-| Bootstrap idempotent, backs up settings, confirms before cleanup | `bootstrap/test/configure.test.ts` |
+| Bootstrap idempotent, backs up the original settings, atomic write, confirms before cleanup | `bootstrap/test/configure.test.ts` |
+| Zero deps in plugin, `node:`-only runtime imports, exec-form hooks | `scripts/check-manifests.ts` |
+| Doctor reports dev vs marketplace mode, never both | `test/plugin/doctor.test.ts` |
 | Skills never auto-trigger | `scripts/lint-skills.ts` |
 | AGENTS.md at most 150 lines | none yet |
 | Conventional Commits | none yet |
