@@ -44,7 +44,7 @@ function gitDecisions(simple: Simple, state: ScanState, ctx: Ctx, scanNested: (s
   const env = { ...state.env, ...simple.env };
   const found: Decision[] = [];
   const primary = parseGitCall(simple.argv, state.cwd, env, ctx, state);
-  if (state.cwdUnknown === true && CWD_GIT.has(primary.sub)) return [unresolvedCwd(`git ${primary.sub}`)];
+  if (state.cwdUnknown === true && CWD_GIT.has(primary.sub)) found.push(unresolvedCwd(`git ${primary.sub}`));
   const calls: GitCall[] = [primary, ...state.alt.map((cwd) => parseGitCall(simple.argv, cwd, env, ctx, state))];
   for (const call of calls) {
     const decision = evaluateGit(call, ctx);
@@ -75,10 +75,12 @@ function evaluateSimple(simple: Simple, state: ScanState, ctx: Ctx, flow: Flow, 
   const indirect = evaluateIndirection(simple, flow);
   if (indirect) found.push(indirect);
   const cwds = [state.cwd, ...state.alt];
+  // The ask is added alongside the normal rules, so a block still wins in pickDecision.
+  if ((isDeleter(simple.name) || simple.name === 'find') && state.cwdUnknown === true && relativeTarget(simple)) {
+    found.push(unresolvedCwd(`${simple.name} with a relative path`));
+  }
   if (simple.name === 'git') {
     found.push(...gitDecisions(simple, state, ctx, scanNested));
-  } else if ((isDeleter(simple.name) || simple.name === 'find') && state.cwdUnknown === true && relativeTarget(simple)) {
-    found.push(unresolvedCwd(`${simple.name} with a relative path`));
   } else if (isDeleter(simple.name)) {
     for (const cwd of cwds) {
       const decision = evaluateDelete(simple, cwd, ctx, flow.piped);

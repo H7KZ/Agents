@@ -1,6 +1,8 @@
 import assert from 'node:assert/strict';
 import { describe, it } from 'node:test';
-import { ruleOf, type Options } from './support.ts';
+import { scan } from '../scripts/scan.ts';
+import { newState } from '../scripts/types.ts';
+import { makeCtx, ruleOf, type Options } from './support.ts';
 
 const DIRTY = 'block:destructive-git-dirty';
 const HOOKS = 'block:skip-git-hooks';
@@ -289,7 +291,7 @@ describe('unknown working directory and sticky HOME', () => {
   const CWD = 'ask:unresolved-cwd';
 
   it('an unresolvable cd makes relative deletes, finds and cwd-dependent git ask', () => {
-    table({ dirty: true }, [
+    table({}, [
       ['cd "$X" && rm -rf dist', CWD],
       ['cd $(mktemp -d) && rm -rf dist', CWD],
       ['cd `pwd`/x; rm -rf dist', CWD],
@@ -312,6 +314,23 @@ describe('unknown working directory and sticky HOME', () => {
       ['Set-Location $x; Remove-Item -Recurse -Force dist', CWD],
       ['cd $x; ri -r -fo dist', CWD],
     ]);
+  });
+
+  it('the unknown-cwd ask never hides a block', () => {
+    table({ dirty: true, untracked: ['n'], branch: 'feature' }, [
+      ['cd "$X" && rm -rf dist /', RM],
+      ['cd "$X" && rm -rf dist /etc', RM],
+      ['cd "$X" && find dist /etc -delete', RM],
+      ['cd "$X" && git push -f origin main', 'block:force-push-protected'],
+      ['cd "$X" && git reset --hard', DIRTY],
+      ['cd "$X" && git clean -fd', DIRTY],
+      ['cd "$X" && git commit --no-verify -m x', HOOKS],
+    ]);
+    const ctx = makeCtx();
+    const decisions = scan('cd "$X" && rm -rf dist', 'sh', ctx, newState(ctx.cwd));
+    assert.deepEqual(decisions.map((d) => d.rule), ['unresolved-cwd']);
+    const mixed = scan('cd "$X" && git push -f origin main', 'sh', makeCtx({ branch: 'feature' }), newState('/repo'));
+    assert.deepEqual(mixed.map((d) => d.rule), ['unresolved-cwd', 'force-push-protected']);
   });
 
   it('absolute targets are still checked, and an absolute cd restores knowledge', () => {
