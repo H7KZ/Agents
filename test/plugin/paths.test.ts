@@ -107,3 +107,32 @@ describe('paths.expand', () => {
     );
   });
 });
+
+describe('Windows short names and drives', () => {
+  const longName = 'C:\\Users\\runneradmin\\AppData\\Local\\Temp';
+  const shortName = 'C:\\Users\\RUNNER~1\\AppData\\Local\\Temp';
+  const expandShort = (p: string): string => (/^C:\\Users\\RUNNER~1(?=\\|$)/i.test(p) ? p.replace(/RUNNER~1/i, 'runneradmin') : p);
+  const w = makePaths('win32', expandShort);
+
+  it('expands 8.3 names so short and long spellings are the same place', () => {
+    assert.equal(w.resolve(shortName, 'repo'), `${longName}\\repo`);
+    assert.ok(w.isInside(w.resolve(shortName, '.'), `${longName}\\repo`));
+    assert.equal(w.relative(w.resolve(longName, '.'), w.resolve(shortName, 'repo\\a.key')), 'repo/a.key');
+    assert.ok(w.same(w.resolve(shortName, '.'), longName));
+  });
+
+  it('keeps expanding for paths that do not exist yet', () => {
+    const missing = makePaths('win32', (p) => {
+      if (p.toLowerCase().includes('missing')) throw new Error('ENOENT');
+      return expandShort(p);
+    });
+    assert.equal(missing.resolve(shortName, 'missing\\deep'), `${longName}\\missing\\deep`);
+  });
+
+  it('treats other drives as outside, in either direction and in any case', () => {
+    assert.equal(win.isInside('D:\\a\\Agents', 'C:\\Users\\x\\repo'), false);
+    assert.equal(win.relative('D:\\a\\Agents', 'C:\\Users\\x\\repo'), null);
+    assert.equal(win.relative('d:\\a\\Agents', 'D:\\A\\agents\\x'), 'x');
+    assert.equal(win.relative('C:\\r', 'D:\\r\\x'), null);
+  });
+});

@@ -222,7 +222,7 @@ describe('process wiring', () => {
     assert.equal(deps.platform, process.platform);
     assert.equal(deps.fallbackCwd, process.cwd());
     assert.equal(typeof deps.runner, 'function');
-    assert.equal(deps.realpath('.'), realpathSync('.'));
+    assert.equal(deps.realpath('.'), realpathSync.native('.'));
     assert.ok(deps.now() instanceof Date);
     assert.ok(deps.homedir.length > 0);
   });

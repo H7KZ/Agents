@@ -2,7 +2,7 @@ import assert from 'node:assert/strict';
 import { describe, it } from 'node:test';
 import fc from 'fast-check';
 import { secretKind } from '../../plugins/h7/scripts/rules-git.ts';
-import { decide, ruleOf, type Calls } from './support.ts';
+import { decide, ruleOf, type Calls, type Options } from './support.ts';
 
 const BLOCK_FORCE = 'block:force-push-protected';
 const BLOCK_HOOKS = 'block:skip-git-hooks';
@@ -336,5 +336,31 @@ describe('parseGitCall global options', () => {
     const calls: Calls = { list: seen };
     ruleOf('git -C sub reset --hard', { calls, dirty: true });
     assert.ok(seen.includes('trackedDirty'));
+  });
+});
+
+describe('Windows 8.3 short names between cwd and git root', () => {
+  const expand = (p: string): string => p.replace(/RUNNER~1/i, 'runneradmin');
+  const win: Options = {
+    platform: 'win32',
+    cwd: 'C:\\Users\\RUNNER~1\\Temp\\repo',
+    root: 'C:/Users/runneradmin/Temp/repo',
+    realpath: expand,
+    untracked: ['server.key', '.env'],
+  };
+
+  it('matches secrets when cwd is the short spelling and git reports the long one', () => {
+    assert.equal(ruleOf('git add .', win), BLOCK_SECRET);
+    assert.equal(ruleOf("git add '.e*'", win), BLOCK_SECRET);
+    assert.equal(ruleOf('git add server.key', win), BLOCK_SECRET);
+  });
+
+  it('matches secrets when the git root is a different drive spelling of cwd', () => {
+    assert.equal(ruleOf('git add .', { ...win, cwd: 'D:\\a\\Agents', root: 'd:/a/agents' }), BLOCK_SECRET);
+  });
+
+  it('keeps repo-local deletes allowed and outside deletes blocked', () => {
+    assert.equal(ruleOf('rm -rf node_modules dist', win), null);
+    assert.equal(ruleOf('rm -rf ..\\..', win), 'block:recursive-delete');
   });
 });
