@@ -234,13 +234,17 @@ describe('workspace scratch directory', () => {
     assert.deepEqual(scratchOf(file, trustedIo(file.ws, file.home)), []);
   });
 
-  it('gives nothing for a huge scratch tree, and tolerates unreadable directories', () => {
+  it('gives nothing for a huge scratch tree, an unreadable directory or an entry that cannot be examined', () => {
     const s = setup(GOOD);
     const scratch = join(s.ws, 'tmp');
     const many = trustedIo(s.ws, s.home, { readdir: (dir) => (dir === scratch ? Array.from({ length: MAX_SCRATCH_ENTRIES + 1 }, (_, i) => `f${i}`) : realFsIo.readdir(dir)) });
     assert.deepEqual(scratchOf(s, many), []);
     const unreadable = trustedIo(s.ws, s.home, { readdir: (dir) => { if (dir === scratch) throw new Error('EACCES'); return realFsIo.readdir(dir); } });
-    assert.equal(scratchOf(s, unreadable).length, 1);
+    assert.deepEqual(scratchOf(s, unreadable), []);
+    const ghost = trustedIo(s.ws, s.home, { readdir: (dir) => (dir === scratch ? ['ghost'] : realFsIo.readdir(dir)) });
+    assert.deepEqual(scratchOf(s, ghost), []);
+    const nested = trustedIo(s.ws, s.home, { readdir: (dir) => { if (dir === join(scratch, 'topic')) throw new Error('EACCES'); return realFsIo.readdir(dir); } });
+    assert.deepEqual(scratchOf(s, nested), []);
     const broken = trustedIo(s.ws, s.home, { lstat: () => { throw new Error('boom'); } });
     assert.deepEqual(scratchOf(s, broken), []);
   });

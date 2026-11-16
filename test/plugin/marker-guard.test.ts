@@ -12,8 +12,7 @@ cleanupTmp();
 
 const runner: Runner = (args) => (args[0] === 'rev-parse' ? { status: 0, stdout: '/repo\n' } : { status: 128, stdout: '' });
 
-function guard(input: object, platform: 'posix' | 'win32' = 'posix'): { code: number; stderr: string; home: string } {
-  const home = tmpDir('h7-marker-guard-');
+function guard(input: object, platform: 'posix' | 'win32' = 'posix', home: string = tmpDir('h7-marker-guard-')): { code: number; stderr: string; home: string } {
   const stdin = JSON.stringify({ cwd: '/repo', ...input });
   const io: GuardIo = {
     stdin,
@@ -38,6 +37,23 @@ const blocked = (r: { code: number; stderr: string }, label: string): void => {
   assert.equal(r.code, 2, label);
   assert.match(r.stderr, /^h7 guard blocked \[workspace-marker\]: .*Ask the user to edit it\.\n$/, label);
 };
+
+describe('the trust file stays protected', () => {
+  it('blocks file tools and shell writes that name the trust file under the h7 home', () => {
+    const home = tmpDir('h7-trust-guard-');
+    const target = join(home, '.h7', 'workspaces.json');
+    for (const tool of ['Write', 'Edit', 'MultiEdit']) {
+      const r = guard({ tool_name: tool, tool_input: { file_path: target } }, process.platform === 'win32' ? 'win32' : 'posix', home);
+      assert.equal(r.code, 2, tool);
+      assert.match(r.stderr, /\[guard-config\]/);
+    }
+    for (const command of [`echo '{}' > ${target}`, 'cp x ~/.h7/workspaces.json', 'tee $HOME/.h7/workspaces.json']) {
+      const r = guard({ tool_name: 'Bash', tool_input: { command } }, process.platform === 'win32' ? 'win32' : 'posix', home);
+      assert.equal(r.code, 2, command);
+      assert.match(r.stderr, /\[guard-config\]/);
+    }
+  });
+});
 
 describe('the workspace marker is guard policy', () => {
   it('blocks file tools aimed at it in every path form', () => {

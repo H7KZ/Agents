@@ -360,20 +360,20 @@ export function locateMarker(cwd: string, io: FsIo, home: string): Located | nul
 
 export const MAX_SCRATCH_ENTRIES = 2000;
 
-/** True when any directory at or below dir (symlinks not followed) has a .git entry; too large a tree counts as yes. */
+/** True when any directory at or below dir (symlinks not followed) has a .git entry; a tree that is too large or cannot be read counts as yes (fail closed). */
 function gitBelow(io: FsIo, dir: string, budget: { left: number }): boolean {
   let names: string[];
   try {
     names = io.readdir(dir);
   } catch {
-    return false;
+    return true; // cannot look: doubtful, so no scratch
   }
   for (const name of names) {
     budget.left -= 1;
     if (name === '.git' || budget.left < 0) return true;
     const child = path.join(dir, name);
     const stat = io.lstat(child);
-    if (stat !== null && !stat.isSymbolicLink() && stat.isDirectory() && gitBelow(io, child, budget)) return true;
+    if (stat === null || (!stat.isSymbolicLink() && stat.isDirectory() && gitBelow(io, child, budget))) return true;
   }
   return false;
 }
