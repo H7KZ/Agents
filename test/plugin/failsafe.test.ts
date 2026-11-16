@@ -211,3 +211,29 @@ describe('the non-git path never spawns git', () => {
     }
   });
 });
+
+describe('large git output', () => {
+  it('an output over the buffer limit is an error, never a clean answer', () => {
+    const overflow = makeSpawnRunner('git', process.env, (() => ({ status: null, stdout: '', error: Object.assign(new Error('x'), { code: 'ENOBUFS' }) })) as never);
+    assert.throws(() => overflow(['diff'], '/'), /git diff output too large/);
+  });
+
+  it('passes the configured limits to spawn', () => {
+    let seen: { timeout?: number; maxBuffer?: number } = {};
+    const capture = makeSpawnRunner('git', process.env, ((_cmd: string, _args: string[], options: { timeout?: number; maxBuffer?: number }) => {
+      seen = options;
+      return { status: 0, stdout: '' };
+    }) as never, { timeout: 7, maxBuffer: 9 });
+    capture(['status'], '/');
+    assert.deepEqual([seen.timeout, seen.maxBuffer], [7, 9]);
+  });
+
+  it('the default runner caps output at 1 MiB and 5 s, the bulk runner is far larger', () => {
+    let seen: { timeout?: number; maxBuffer?: number } = {};
+    makeSpawnRunner('git', process.env, ((_c: string, _a: string[], options: { timeout?: number; maxBuffer?: number }) => {
+      seen = options;
+      return { status: 0, stdout: '' };
+    }) as never)(['status'], '/');
+    assert.deepEqual([seen.timeout, seen.maxBuffer], [5000, 1024 * 1024]);
+  });
+});

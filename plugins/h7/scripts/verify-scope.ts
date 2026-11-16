@@ -1,4 +1,4 @@
-import { spawnRunner, type Runner } from './git.ts';
+import { bulkRunner, type Runner } from './git.ts';
 
 export type FileKind = 'source' | 'test' | 'other';
 
@@ -110,7 +110,7 @@ export function computeScope(run: Runner, startDir: string, base?: string): Scop
 
 const USAGE = 'usage: verify-scope.ts [--base <ref>]';
 
-export function main(argv: string[], out: (text: string) => void, err: (text: string) => void, cwd: string = process.cwd(), run: Runner = spawnRunner): number {
+export function main(argv: string[], out: (text: string) => void, err: (text: string) => void, cwd: string = process.cwd(), run: Runner = bulkRunner): number {
   const flag = argv.indexOf('--base');
   const base = flag === -1 ? undefined : argv[flag + 1];
   if (argv.length !== (flag === -1 ? 0 : 2) || (flag !== -1 && (base === undefined || base.startsWith('-')))) {
