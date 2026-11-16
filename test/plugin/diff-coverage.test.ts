@@ -88,10 +88,40 @@ describe('diffCoverage', () => {
     assert.deepEqual(v.reasons, ['src/c.ts: not in the coverage report', 'xsrc/b.ts: not in the coverage report']);
   });
 
-  it('honors lower thresholds, and passes with no measurable changes', () => {
+  it('honors lower thresholds', () => {
     const v = diffCoverage({ files: [file('src/a.ts', [[1, 4]])] }, records, { lines: 70, branches: 30 });
     assert.equal(v.pass, true);
-    assert.equal(diffCoverage({ files: [] }, records, opts).pass, true);
+    assert.deepEqual(v.unmeasured, []);
+  });
+
+  it('fails as unmeasured when the change has no source lines or none the report instruments', () => {
+    const none = diffCoverage({ files: [] }, records, opts);
+    assert.equal(none.pass, false);
+    assert.deepEqual(none.unmeasured, ['(no changed source lines)']);
+    const onlyTests = diffCoverage({ files: [file('src/a.test.ts', [[1, 1]], 'test'), file('src/gone.ts', [])] }, records, opts);
+    assert.deepEqual(onlyTests.unmeasured, ['(no changed source lines)']);
+    const outside = diffCoverage({ files: [file('src/b.ts', [[50, 60]]), file('src/a.ts', [[1, 1]])] }, records, opts);
+    assert.equal(outside.pass, false);
+    assert.deepEqual(outside.unmeasured, ['src/b.ts']);
+    assert.match(outside.reasons.join('|'), /unmeasured, nothing to prove coverage with: src\/b\.ts/);
+  });
+
+  it('a missing file is reported as missing only, not also unmeasured', () => {
+    assert.deepEqual(diffCoverage({ files: [file('src/c.ts', [[1, 1]])] }, records, opts).unmeasured, []);
+  });
+
+  it('allowUnmeasured opts out explicitly', () => {
+    assert.equal(diffCoverage({ files: [] }, records, { ...opts, allowUnmeasured: true }).pass, true);
+    assert.equal(diffCoverage({ files: [file('src/b.ts', [[50, 60]])] }, records, { ...opts, allowUnmeasured: true }).pass, true);
+  });
+
+  it('prefers an exact record, accepts a unique suffix match and rejects ambiguity', () => {
+    const rec = (path: string, hits: number) => `SF:${path}\nDA:1,${hits}\nend_of_record\n`;
+    const scope = { files: [file('src/a.ts', [[1, 1]])] };
+    const exact = diffCoverage(scope, parseLcov(rec('/x/src/a.ts', 0) + rec('src/a.ts', 1)), opts);
+    assert.equal(exact.pass, true);
+    assert.equal(diffCoverage(scope, parseLcov(rec('/x/src/a.ts', 1)), opts).pass, true);
+    assert.throws(() => diffCoverage(scope, parseLcov(rec('/x/src/a.ts', 1) + rec('/y/src/a.ts', 0)), opts), /ambiguous coverage records for src\/a\.ts: \/x\/src\/a\.ts, \/y\/src\/a\.ts/);
   });
 
   it('detects a global drop against a baseline, in lines or in branches', () => {
@@ -137,6 +167,20 @@ describe('diff-coverage main', () => {
   it('takes thresholds from flags', () => {
     const failScope = JSON.stringify({ files: [file('src/a.ts', [[3, 3]])] });
     assert.equal(run(['--lcov', 'l.info', '--scope', 's.json', '--lines', '0', '--branches', '0'], { ...files, 's.json': failScope }).code, 0);
+  });
+
+  it('fails on an empty scope unless --allow-unmeasured is given, anywhere in the arguments', () => {
+    const empty = { ...files, 's.json': '{"files":[]}' };
+    assert.equal(run(['--lcov', 'l.info', '--scope', 's.json'], empty).code, 1);
+    assert.equal(run(['--lcov', 'l.info', '--allow-unmeasured', '--scope', 's.json'], empty).code, 0);
+    assert.equal(run(['--lcov', 'l.info', '--scope', 's.json', '--allow-unmeasured'], empty).code, 0);
+  });
+
+  it('reports an ambiguous record as an error', () => {
+    const rec = (dir: string): string => `SF:/${dir}/src/b.ts\nDA:1,1\nend_of_record\n`;
+    const r = run(['--lcov', 'l.info', '--scope', 's.json'], { 'l.info': rec('x') + rec('y'), 's.json': scope });
+    assert.equal(r.code, 2);
+    assert.match(r.err, /ambiguous/);
   });
 
   it('rejects bad usage with exit 2', () => {

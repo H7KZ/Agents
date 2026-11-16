@@ -68,6 +68,8 @@ export interface FileCoverage {
 
 export interface Options {
   lines: number;
+  /** Opt out of failing when changed source has no instrumented lines or branches to measure. */
+  allowUnmeasured?: boolean;
   branches: number;
 }
 
@@ -76,6 +78,8 @@ export interface Verdict {
   lines: Ratio;
   branches: Ratio;
   files: FileCoverage[];
+  /** Changed source with no instrumented line or branch in the changed range (or no changed source at all). Fails unless allowed. */
+  unmeasured: string[];
   global?: { lines: { current: number; baseline: number }; branches: { current: number; baseline: number }; dropped: boolean };
   reasons: string[];
 }
@@ -83,7 +87,11 @@ export interface Verdict {
 const inRanges = (line: number, file: ScopeFile): boolean => file.whole || file.ranges.some(([from, to]) => line >= from && line <= to);
 
 function findRecord(records: LcovRecord[], path: string): LcovRecord | undefined {
-  return records.find((record) => record.file === path || record.file.endsWith(`/${path}`));
+  const exact = records.find((record) => record.file === path);
+  if (exact !== undefined) return exact;
+  const suffix = records.filter((record) => record.file.endsWith(`/${path}`));
+  if (suffix.length > 1) throw new Error(`ambiguous coverage records for ${path}: ${suffix.map((record) => record.file).join(', ')}`);
+  return suffix[0];
 }
 
 /** Coverage of only the added and modified lines of changed source files. Test and other files are not measured. */
@@ -94,14 +102,19 @@ export function diffCoverage(scope: Pick<Scope, 'files'>, records: LcovRecord[],
   let branches = 0;
   let branchesHit = 0;
   const reasons: string[] = [];
+  const unmeasured: string[] = [];
+  let considered = 0;
   for (const file of scope.files.filter((f) => f.kind === 'source')) {
     if (!file.whole && file.ranges.length === 0) continue;
     const record = findRecord(records, file.path);
     if (record === undefined) {
+      considered++;
       files.push({ path: file.path, missing: true, uncoveredLines: [], uncoveredBranches: [] });
       reasons.push(`${file.path}: not in the coverage report`);
       continue;
     }
+    considered++;
+    const measuredBefore = lines + branches;
     const uncoveredLines: number[] = [];
     for (const [at, hits] of record.lines) {
       if (!inRanges(at, file)) continue;
@@ -116,13 +129,16 @@ export function diffCoverage(scope: Pick<Scope, 'files'>, records: LcovRecord[],
       if (branch.taken) branchesHit++;
       else uncoveredBranches.push(branch.line);
     }
+    if (lines + branches === measuredBefore) unmeasured.push(file.path);
     files.push({ path: file.path, missing: false, uncoveredLines, uncoveredBranches });
   }
   const linesRatio = ratio(linesHit, lines);
   const branchesRatio = ratio(branchesHit, branches);
   if (linesRatio.pct < options.lines - EPSILON) reasons.push(`diff line coverage ${linesRatio.pct.toFixed(1)}% is below ${options.lines}%`);
   if (branchesRatio.pct < options.branches - EPSILON) reasons.push(`diff branch coverage ${branchesRatio.pct.toFixed(1)}% is below ${options.branches}%`);
-  const verdict: Verdict = { pass: false, lines: linesRatio, branches: branchesRatio, files, reasons };
+  if (considered === 0) unmeasured.push('(no changed source lines)');
+  if (unmeasured.length > 0 && options.allowUnmeasured !== true) reasons.push(`unmeasured, nothing to prove coverage with: ${unmeasured.join(', ')}`);
+  const verdict: Verdict = { pass: false, lines: linesRatio, branches: branchesRatio, files, unmeasured, reasons };
   if (baseline !== undefined) {
     const current = globalCoverage(records);
     const before = globalCoverage(baseline);
@@ -134,14 +150,17 @@ export function diffCoverage(scope: Pick<Scope, 'files'>, records: LcovRecord[],
   return verdict;
 }
 
-const USAGE = 'usage: diff-coverage.ts --lcov <file> --scope <file> [--baseline <lcov>] [--lines <pct>] [--branches <pct>]';
+const USAGE = 'usage: diff-coverage.ts --lcov <file> --scope <file> [--baseline <lcov>] [--lines <pct>] [--branches <pct>] [--allow-unmeasured]';
+const SWITCH = '--allow-unmeasured';
 const FLAGS = ['--lcov', '--scope', '--baseline', '--lines', '--branches'];
 
 export function main(argv: string[], out: (text: string) => void, err: (text: string) => void, read: (path: string) => string = (path) => readFileSync(path, 'utf8')): number {
+  const allowUnmeasured = argv.includes(SWITCH);
+  const args = argv.filter((arg) => arg !== SWITCH);
   const values = new Map<string, string>();
-  for (let i = 0; i < argv.length; i += 2) {
-    const flag = argv[i] as string;
-    const value = argv[i + 1];
+  for (let i = 0; i < args.length; i += 2) {
+    const flag = args[i] as string;
+    const value = args[i + 1];
     if (!FLAGS.includes(flag) || value === undefined) {
       err(USAGE);
       return 2;
@@ -149,7 +168,7 @@ export function main(argv: string[], out: (text: string) => void, err: (text: st
     values.set(flag, value);
   }
   const percent = (flag: string): number => (values.has(flag) ? Number(values.get(flag)) : 100);
-  const options = { lines: percent('--lines'), branches: percent('--branches') };
+  const options = { lines: percent('--lines'), branches: percent('--branches'), allowUnmeasured };
   const lcov = values.get('--lcov');
   const scopePath = values.get('--scope');
   if (lcov === undefined || scopePath === undefined || ![options.lines, options.branches].every((n) => n >= 0 && n <= 100)) {
