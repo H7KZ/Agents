@@ -55,9 +55,11 @@ scripts/                          repo tooling: lint-skills.ts, check-manifests.
 | 100% coverage | `npm run test:coverage` (CI, all 6 matrix cells) |
 | Mutation score at least 80 | `npm run mutation` (CI job) |
 | Works on Windows, macOS, Linux, Node 22.18 and 24 | `.github/workflows/ci.yml` matrix |
-| Guard blocks force push to protected branches, hook skipping, destructive git on dirty tree, secret commits, recursive deletes outside repo | `plugins/h7/test/rules-*.test.ts`, `guard.e2e.ts` |
-| Guard asks for protected pushes and deploy/publish | `plugins/h7/test/rules-git.test.ts`, `rules-deploy.test.ts` |
-| Guard errors and unresolvable targets ask | `plugins/h7/test/failsafe.test.ts`, `braces.test.ts` |
+| Guard blocks force push to protected branches (and deleting them), hook skipping (flags, abbreviations, core.hooksPath outside the repo), destructive git on a dirty tree (tracked changes; untracked for `git clean`), secret commits (high-confidence names, `.pem` with a private key), recursive deletes outside repo, `rm -rf .git`, `find -delete` outside repo | `plugins/h7/test/rules-*.test.ts`, `hardening.test.ts`, `guard.e2e.ts` |
+| Guard asks for protected pushes, deploy/publish (option-aware, wrappers, `--dry-run` allowed), ambiguous secrets, history rewrites, stash drop, git aliases | `plugins/h7/test/rules-git.test.ts`, `rules-deploy.test.ts`, `hardening.test.ts` |
+| Guard asks on what it cannot resolve: git failing or missing, shell/interpreter stdin, `xargs`, `iex`, variable command words, `cd x || ...`, unresolved targets | `plugins/h7/test/failsafe.test.ts`, `hardening.test.ts`, `braces.test.ts` |
+| Guard state across a chain (branch, stash, cd, staged files; subshells isolated) | `plugins/h7/test/hardening.test.ts` |
+| Non-git commands never spawn git | `plugins/h7/test/failsafe.test.ts` |
 | Guard log has no secrets, private permissions | `plugins/h7/test/log.test.ts` (property test) |
 | Git is run safely in untrusted repos | `plugins/h7/test/git.test.ts` |
 | Bootstrap idempotent, backs up settings, confirms before cleanup | `bootstrap/test/configure.test.ts` |

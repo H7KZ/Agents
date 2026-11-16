@@ -39,6 +39,13 @@ A `PreToolUse` hook for Bash and PowerShell. It blocks force pushes to protected
 repo; it asks before protected pushes and deploy/publish commands. Near-misses are logged (secrets redacted) to
 `~/.h7/guard.log`. Internal errors ask instead of allowing. `H7_GUARD=off` disables it.
 
+It is a safety floor against agent accidents, not a sandbox: anything it cannot resolve statically asks
+(git failing or missing, piping into a shell, `xargs`, `iex`, variable command words or delete targets, git aliases,
+`find -delete` and `xargs rm` starts), and only clearly destructive, resolvable cases are blocked. State carries across a
+chain (`git checkout main && git push -f`, `git stash -u && git reset --hard`, `cd` outside a subshell). Secret files are
+tiered: `.env`, `id_rsa`, `*.key`, `*.p12` and similar block; `.env.development`, `*.pem`, `.npmrc`, `*.tfvars` ask
+(a `*.pem` holding a private key blocks). Deletes under the OS temp directory are allowed.
+
 ## Development
 
 See [AGENTS.md](AGENTS.md). `npm ci && npm run check`.
