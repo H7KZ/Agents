@@ -1,7 +1,9 @@
 import { closeSync, fstatSync, mkdirSync, openSync, readFileSync, readSync, readdirSync, renameSync, lstatSync, writeFileSync, writeSync } from 'node:fs';
-import { join } from 'node:path';
-import { isPhase, isRunId, makeEvent, makeRunId, parseJournal, progressOf, serializeEvent, STALL_LIMIT, summarize } from './run-journal-core.ts';
+import { dirname, join, resolve } from 'node:path';
+import { spawnRunner } from './git.ts';
+import { countProblem, isPhase, isRunId, makeEvent, makeRunId, parseJournal, progressOf, provenCount, serializeEvent, STALL_LIMIT, summarize, type Observed } from './run-journal-core.ts';
 import { ensureExclude } from './setup-files.ts';
+import { incomplete, parseState, STATE_FILE } from './verify-state.ts';
 
 export interface Stat {
   isSymbolicLink(): boolean;
@@ -16,9 +18,17 @@ export interface JournalIo {
   readdir(path: string): string[];
   /** Replace a whole file (temp file plus rename). */
   write(path: string, text: string): void;
-  /** Append one line in a single write; starts a new line first when the file ends in a torn one. */
+  /**
+   * Append one line in a single O_APPEND write; starts a new line first when the file ends in a torn one. Refuses a line over MAX_LINE_BYTES and a
+   * hardlinked file. Known limit: a path can still be swapped for a link between the caller's lstat checks and this open (no O_NOFOLLOW on Windows);
+   * h7 guards against accidents, not against a hostile process writing in the same repo.
+   */
   append(path: string, line: string): void;
+  /** Absolute path of the repository's info/exclude as git reports it (a worktree shares the main one), null when git cannot say. */
+  excludePath(root: string): string | null;
 }
+
+export const MAX_LINE_BYTES = 65536;
 
 export const realJournalIo: JournalIo = {
   now: () => new Date(),
@@ -51,10 +61,16 @@ export const realJournalIo: JournalIo = {
     writeFileSync(temp, text);
     renameSync(temp, path);
   },
+  excludePath(root) {
+    const result = spawnRunner(['rev-parse', '--git-path', 'info/exclude'], root);
+    return result.status === 0 ? resolve(root, result.stdout.trim()) : null;
+  },
   append(path, line) {
+    if (Buffer.byteLength(line) > MAX_LINE_BYTES) throw new Error(`refusing a journal line over ${MAX_LINE_BYTES} bytes`);
     const fd = openSync(path, 'a+');
     try {
-      const size = fstatSync(fd).size;
+      const { size, nlink } = fstatSync(fd);
+      if (nlink > 1) throw new Error('refusing a hardlinked journal file');
       let prefix = '';
       if (size > 0) {
         const last = Buffer.alloc(1);
@@ -85,6 +101,8 @@ const USAGE = [
 
 export const RUNS_DIR = '.h7/runs';
 export const JOURNAL = 'journal.jsonl';
+export const CURRENT = 'CURRENT';
+export const PROVEN_FILE = '.h7/review/proven.json';
 
 class Failure extends Error {}
 
@@ -131,15 +149,20 @@ function checkLinks(root: string, parts: string[], io: JournalIo): void {
   }
 }
 
-function latestRun(root: string, io: JournalIo): string {
-  const ids = io.readdir(join(root, RUNS_DIR)).filter(isRunId).sort();
-  const id = ids[ids.length - 1];
-  if (id === undefined) throw new Failure('no run found; start one with: run-journal.ts start');
-  return id;
+/** The run `start` recorded in CURRENT; without it only a single run is unambiguous. Never guesses between several. */
+function defaultRun(root: string, io: JournalIo): string {
+  checkLinks(root, ['.h7', 'runs', CURRENT], io);
+  const current = (io.read(join(root, RUNS_DIR, CURRENT)) ?? '').trim();
+  if (current !== '') return current;
+  const ids = io.readdir(join(root, RUNS_DIR)).filter(isRunId);
+  const [only, ...others] = ids;
+  if (only === undefined) throw new Failure('no run found; start one with: run-journal.ts start');
+  if (others.length > 0) throw new Failure(`several runs and no ${CURRENT} file: pass --run <id> (${ids.sort().join(', ')})`);
+  return only;
 }
 
 function pickRun(root: string, requested: string | undefined, io: JournalIo): string {
-  const id = requested ?? latestRun(root, io);
+  const id = requested ?? defaultRun(root, io);
   if (!isRunId(id)) throw new Failure(`bad run id: ${id}`);
   checkLinks(root, ['.h7', 'runs', id, JOURNAL], io);
   if (io.lstat(join(root, RUNS_DIR, id))?.isDirectory() !== true) throw new Failure(`no such run: ${id}`);
@@ -149,23 +172,21 @@ function pickRun(root: string, requested: string | undefined, io: JournalIo): st
 function start(root: string, args: string[], env: Env): void {
   const { values } = flags(args, ['--task']);
   const { io } = env;
-  checkLinks(root, ['.h7', 'runs'], io);
+  checkLinks(root, ['.h7', 'runs', CURRENT], io);
+  const exclude = io.excludePath(root);
+  if (exclude === null) throw new Failure('cannot locate the git exclude file (is git installed and is this a repository?); nothing written');
+  const excluded = ensureExclude(io.read(exclude));
+  if (excluded.status !== 'unchanged') {
+    io.mkdir(dirname(exclude));
+    io.write(exclude, excluded.text);
+  }
   const base = makeRunId(io.now(), values['--task'] ?? '');
   let id = base;
   for (let n = 2; io.lstat(join(root, RUNS_DIR, id)) !== null; n += 1) id = `${base}-${n}`;
   io.mkdir(join(root, RUNS_DIR, id));
   io.append(join(root, RUNS_DIR, id, JOURNAL), serializeEvent(makeEvent('note', { event: 'start', task: values['--task'] ?? '' }, io.now())));
-  let excluded = false;
-  if (io.lstat(join(root, '.git'))?.isDirectory() === true) {
-    const file = join(root, '.git', 'info', 'exclude');
-    const result = ensureExclude(io.read(file));
-    if (result.status !== 'unchanged') {
-      io.mkdir(join(root, '.git', 'info'));
-      io.write(file, result.text);
-    }
-    excluded = true;
-  }
-  env.out(JSON.stringify({ id, dir: `${RUNS_DIR}/${id}`, journal: `${RUNS_DIR}/${id}/${JOURNAL}`, excluded }));
+  io.write(join(root, RUNS_DIR, CURRENT), `${id}\n`);
+  env.out(JSON.stringify({ id, dir: `${RUNS_DIR}/${id}`, journal: `${RUNS_DIR}/${id}/${JOURNAL}`, exclude, excluded: true }));
 }
 
 function append(root: string, args: string[], env: Env): void {
@@ -179,9 +200,31 @@ function append(root: string, args: string[], env: Env): void {
     throw new Failure('data is not valid JSON');
   }
   const record = typeof data === 'object' && data !== null && !Array.isArray(data) ? (data as Record<string, unknown>) : { value: data };
+  const problem = countProblem(phase, record);
+  if (problem !== null) throw new Failure(problem);
   const id = pickRun(root, values['--run'], env.io);
   env.io.append(join(root, RUNS_DIR, id, JOURNAL), serializeEvent(makeEvent(phase, record, env.io.now())));
   env.out(JSON.stringify({ id, phase }));
+}
+
+/** What the verify record and the proven findings on disk say, when they exist. */
+function observe(root: string, io: JournalIo): Observed {
+  const unreadable: string[] = [];
+  let failing: number | null = null;
+  let unresolved: number | null = null;
+  const verify = io.read(join(root, STATE_FILE));
+  if (verify !== null) {
+    const state = parseState(verify);
+    if (state === null) unreadable.push(STATE_FILE);
+    else failing = incomplete(state).length;
+  }
+  const proven = io.read(join(root, PROVEN_FILE));
+  if (proven !== null) {
+    const count = provenCount(proven);
+    if (count === null) unreadable.push(PROVEN_FILE);
+    else unresolved = count;
+  }
+  return { failing, unresolved, unreadable };
 }
 
 function load(root: string, id: string, io: JournalIo): ReturnType<typeof parseJournal> {
@@ -200,7 +243,7 @@ export function main(argv: string[], env: Env): number {
       const { values } = flags(args, ['--run', '--limit']);
       const id = pickRun(root, values['--run'], env.io);
       const { events, corrupt } = load(root, id, env.io);
-      const progress = progressOf(events, positive(values['--limit'], STALL_LIMIT, '--limit'));
+      const progress = progressOf(events, positive(values['--limit'], STALL_LIMIT, '--limit'), observe(root, env.io));
       env.out(JSON.stringify({ id, corrupt, ...progress }));
       return progress.stop ? 1 : 0;
     } else {

@@ -24,16 +24,19 @@ export const isPhase = (name: string): name is Phase => (PHASES as readonly stri
 /** A run id is a single path segment: no separators, no dots at the start, no traversal. */
 export const isRunId = (id: string): boolean => /^[A-Za-z0-9][A-Za-z0-9._-]{0,79}$/.test(id) && !id.includes('..');
 
-const TOKEN_SHAPES = /\b(?:gh[pousr]_[A-Za-z0-9]{20,}|github_pat_\w{20,}|sk-[A-Za-z0-9_-]{20,}|AKIA[0-9A-Z]{16}|xox[baprs]-[\w-]{10,}|eyJ[\w-]{10,}\.[\w-]{10,}\.[\w-]{5,})/g;
-const URL_USER = /(\b[a-z][a-z0-9+.-]*:\/\/)[^\s/@'"]+@/gi;
+const TOKEN_SHAPES = /\b(?:gh[pousr]_[A-Za-z0-9]{20,}|github_pat_\w{20,}|sk-[A-Za-z0-9_-]{20,}|sk_(?:live|test)_[A-Za-z0-9]{16,}|npm_[A-Za-z0-9]{30,}|glpat-[\w-]{20,}|AIza[\w-]{30,}|AKIA[0-9A-Z]{16}|xox[baprs]-[\w-]{10,}|eyJ[\w-]{10,}\.[\w-]{10,}\.[\w-]{5,})/g;
+const PEM = /-----BEGIN [A-Z ]*PRIVATE KEY-----[\s\S]*?(?:-----END [A-Z ]*PRIVATE KEY-----|$)/g;
+/** Everything up to the last @ of the token: a password may itself hold / or @. */
+const URL_USER = /(\b[a-z][a-z0-9+.-]*:\/\/)[^\s'"]*@/gi;
+const USER_FLAG = /(\s(?:-u|--user)\s+)[^\s:]*:\S*/g;
 const SECRET_KEY = /token|secret|passw(?:or)?d|api[-_]?key|access[-_]?key|private[-_]?key|authorization|credential|cookie/i;
 
 /** Secrets out of free text: URL credentials, bearer and flag values, `NAME_TOKEN=...`, and well-known token shapes. */
 export function redactText(text: string): string {
-  return redact(text.replace(URL_USER, '$1[REDACTED]@')).replace(TOKEN_SHAPES, '[REDACTED]');
+  return redact(text.replace(PEM, '[REDACTED]').replace(URL_USER, '$1[REDACTED]@').replace(USER_FLAG, '$1[REDACTED]')).replace(TOKEN_SHAPES, '[REDACTED]');
 }
 
-/** Redacts every string, and any string or number under a secret-looking key. Bounded in depth, items and string length. Never throws on JSON input. */
+/** Redacts every string and key, and blanks whatever sits under a secret-looking key (any type). Bounded in depth, items and string length. Never throws on JSON input. */
 export function redactValue(value: unknown, depth = 0): unknown {
   if (typeof value === 'string') {
     const clean = redactText(value);
@@ -44,7 +47,7 @@ export function redactValue(value: unknown, depth = 0): unknown {
   if (Array.isArray(value)) return value.slice(0, MAX_ITEMS).map((item) => redactValue(item, depth + 1));
   const entries = Object.entries(value).slice(0, MAX_ITEMS);
   return Object.fromEntries(
-    entries.map(([key, item]) => [key, SECRET_KEY.test(key) && (typeof item === 'string' || typeof item === 'number') ? '[REDACTED]' : redactValue(item, depth + 1)]),
+    entries.map(([key, item]) => [redactText(key), SECRET_KEY.test(key) ? '[REDACTED]' : redactValue(item, depth + 1)]),
   );
 }
 
@@ -90,59 +93,103 @@ export function countOf(value: unknown): number | null {
   return Array.isArray(value) ? value.length : null;
 }
 
+/** Why an event's counts cannot be trusted, or null. Loop events must carry both counts; verify and review events must not carry a bad one; other phases are free. */
+export function countProblem(phase: Phase, data: Record<string, unknown>): string | null {
+  if (phase !== 'verify' && phase !== 'review' && phase !== 'loop') return null;
+  for (const name of ['failing', 'unresolved']) {
+    const present = name in data;
+    if (present ? countOf(data[name]) === null : phase === 'loop') return `${phase} event needs "${name}" as a non-negative integer or an array${present ? ` (got ${JSON.stringify(data[name])})` : ''}`;
+  }
+  return null;
+}
+
+/** Number of proven findings in a `proven.json` text (`kept[]`), null when it is not one. */
+export function provenCount(text: string): number | null {
+  try {
+    const kept = (JSON.parse(text) as { kept?: unknown } | null)?.kept;
+    return Array.isArray(kept) ? kept.length : null;
+  } catch {
+    return null;
+  }
+}
+
 export interface Round {
   round: number;
-  failing: number;
-  unresolved: number;
-  score: number;
+  /** Null (with score) when the loop event's counts were missing or invalid: the round is unknown, never zero. */
+  failing: number | null;
+  unresolved: number | null;
+  score: number | null;
   improving: boolean;
 }
 
 /**
- * Score of a round = failing verification layers + unresolved proven findings, as last reported by a verify, review or loop event up to
- * the loop event that closes the round (a figure not reported again carries over). Improving = a measurable decrease against the round
- * before, or a score of zero; the first round is the baseline and counts as improving. Events after the last loop event are an open round.
+ * One round per loop event; its score is failing verify layers plus unresolved proven findings as that event reports them. A round improves
+ * when its score is below the best score of the rounds before it (a zero score always counts), so oscillating cannot reset the brake.
+ * The first round has nothing to beat: it counts as improving only when it is already zero, so five stuck rounds are five rounds.
+ * A round with a missing or invalid count is unknown: never improving, never clean, and it does not move the best score.
  */
 export function roundScores(events: JournalEvent[]): Round[] {
   const rounds: Round[] = [];
-  let failing = 0;
-  let unresolved = 0;
+  let best: number | null = null;
   for (const event of events) {
-    if (event.phase !== 'verify' && event.phase !== 'review' && event.phase !== 'loop') continue;
-    failing = countOf(event.data.failing) ?? failing;
-    unresolved = countOf(event.data.unresolved) ?? unresolved;
     if (event.phase !== 'loop') continue;
+    const failing = countOf(event.data.failing);
+    const unresolved = countOf(event.data.unresolved);
+    const round = rounds.length + 1;
+    if (failing === null || unresolved === null) {
+      rounds.push({ round, failing: null, unresolved: null, score: null, improving: false });
+      continue;
+    }
     const score = failing + unresolved;
-    const before = rounds[rounds.length - 1];
-    rounds.push({ round: rounds.length + 1, failing, unresolved, score, improving: before === undefined || score < before.score || score === 0 });
+    rounds.push({ round, failing, unresolved, score, improving: score === 0 || (best !== null && score < best) });
+    best = best === null ? score : Math.min(best, score);
   }
   return rounds;
 }
+
+/** What the files on disk say, when present: failing verify layers from `.h7/verify.json`, proven findings from `.h7/review/proven.json`. */
+export interface Observed {
+  failing: number | null;
+  unresolved: number | null;
+  /** Files that exist but cannot be read: nothing can be called clean while they are. */
+  unreadable: string[];
+}
+
+export const NO_OBSERVED: Observed = { failing: null, unresolved: null, unreadable: [] };
 
 export interface Progress {
   rounds: Round[];
   /** Trailing rounds that did not improve. */
   streak: number;
+  /** Effective limit: a larger request is capped at STALL_LIMIT, a smaller one lowers it. */
   limit: number;
   stop: boolean;
-  /** The last closed round has nothing failing or unresolved: only the rest of the done predicate is left. */
+  /** The last closed round reports nothing failing or unresolved and the files on disk agree: only the rest of the done predicate is left. */
   clean: boolean;
   reason: string;
+  warnings: string[];
+  observed: Observed;
 }
 
-export function progressOf(events: JournalEvent[], limit = STALL_LIMIT): Progress {
+export function progressOf(events: JournalEvent[], limit = STALL_LIMIT, observed: Observed = NO_OBSERVED): Progress {
   const rounds = roundScores(events);
+  const cap = Math.min(limit, STALL_LIMIT);
   let streak = 0;
   for (let i = rounds.length - 1; i >= 0 && !(rounds[i] as Round).improving; i -= 1) streak += 1;
-  const stop = streak >= limit;
+  const stop = streak >= cap;
   const last = rounds[rounds.length - 1];
-  const clean = last !== undefined && last.score === 0;
+  const warnings = observed.unreadable.map((file) => `unreadable: ${file}`);
+  if (last !== undefined && observed.failing !== null && observed.failing !== last.failing) warnings.push(`reported failing ${last.failing ?? 'unknown'} but .h7/verify.json shows ${observed.failing}`);
+  if (last !== undefined && observed.unresolved !== null && observed.unresolved !== last.unresolved) warnings.push(`reported unresolved ${last.unresolved ?? 'unknown'} but .h7/review/proven.json shows ${observed.unresolved}`);
+  const zero = last !== undefined && last.score === 0;
+  const clean = zero && warnings.length === 0;
   let reason: string;
-  if (stop) reason = `${streak} consecutive rounds without a decrease in failing layers plus unresolved findings: stop and report`;
+  if (stop) reason = `${streak} consecutive rounds without beating the best score (failing layers plus unresolved findings): stop and report`;
   else if (last === undefined) reason = 'no closed round yet';
+  else if (zero && !clean) reason = 'reported counts are zero but the files on disk disagree: not clean';
   else if (clean) reason = 'last round is clean: check the rest of the done predicate';
-  else reason = `${streak} of ${limit} non-improving rounds`;
-  return { rounds, streak, limit, stop, clean, reason };
+  else reason = `${streak} of ${cap} non-improving rounds`;
+  return { rounds, streak, limit: cap, stop, clean, reason, warnings, observed };
 }
 
 export interface Summary {
