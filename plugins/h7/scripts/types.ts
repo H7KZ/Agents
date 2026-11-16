@@ -19,14 +19,16 @@ export interface Ctx {
   paths: Paths;
   git: Git;
   disk: Disk;
-  /** True when the command text assigns HOME or USERPROFILE, so ~ cannot be trusted. */
-  homeAssigned?: boolean;
+  /** Shared and sticky: set once HOME or USERPROFILE is mentioned anywhere, so ~ cannot be trusted. */
+  taint: { home: boolean };
   tmp: TempInfo;
 }
 
 /** What earlier commands in the same chain have already changed. */
 export interface ScanState {
   cwd: string;
+  /** True after a cd whose target could not be resolved; relative deletes and cwd-dependent git ask. */
+  cwdUnknown?: boolean;
   /** Other directories the shell may be in after `cd x || ...`. */
   alt: string[];
   env: Record<string, string>;
@@ -42,7 +44,7 @@ export interface ScanState {
 }
 
 export function newState(cwd: string, env: Record<string, string> = {}): ScanState {
-  return { cwd, alt: [], env, staged: [], aliases: {} };
+  return { cwd, alt: [], cwdUnknown: false, env, staged: [], aliases: {} };
 }
 
 export function cloneState(state: ScanState): ScanState {
@@ -59,5 +61,5 @@ export function ask(rule: string, reason: string): Decision {
 
 /** Expands a leading ~ unless the command assigns HOME; variable references always stay unresolved (null). */
 export function expandIn(ctx: Ctx, word: string): string | null {
-  return ctx.paths.expand(word, ctx.homeAssigned === true ? null : ctx.home);
+  return ctx.paths.expand(word, ctx.taint.home ? null : ctx.home);
 }

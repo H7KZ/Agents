@@ -68,6 +68,7 @@ export function makeCtx(options: Options = {}): Ctx {
     paths: makePaths(platform, (p) => p),
     git: fakeGit({ root: options.root === undefined ? (win ? 'C:/work/repo' : '/repo') : options.root, ...options }, options.calls),
     disk: fakeDisk(options.files),
+    taint: { home: false },
     tmp: { dirs: options.tmpDirs ?? [] },
   };
 }

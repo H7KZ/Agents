@@ -85,7 +85,7 @@ export function run(stdinText: string, env: Record<string, string | undefined>, 
     const candidates = [...new Set([io.tmpdir, ...posixTemp].map((dir) => paths.resolve(cwd, dir)))];
     // A temp dir that contains the working directory or the home directory must not whitelist them.
     const dirs = candidates.filter((dir) => !paths.isInside(dir, cwd) && !paths.isInside(dir, paths.resolve(cwd, home)));
-    const ctx: Ctx = { cwd, home, paths, git: createGit(io.runner, disk), disk, tmp: { dirs } };
+    const ctx: Ctx = { cwd, home, paths, git: createGit(io.runner, disk), disk, taint: { home: false }, tmp: { dirs } };
     const decision = pickDecision(scan(command, input.tool_name === 'PowerShell' ? 'ps' : 'sh', ctx, newState(cwd)));
     if (decision === null) return ALLOW;
     return respond(decision, appendLog(home, entry(decision.decision, decision.rule, command, cwd)));

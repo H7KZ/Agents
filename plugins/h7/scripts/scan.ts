@@ -14,17 +14,25 @@ const DIRECTORY_CHANGERS = new Set(['cd', 'chdir', 'pushd', 'set-location', 'sl'
 const ENV_SETTERS = new Set(['export', 'set', 'declare', 'typeset', 'readonly']);
 const LEAVERS = new Set(['exit', 'return']);
 
-/** HOME or USERPROFILE assigned, or named by a command that can set it: then ~ no longer means the real home. */
-const HOME_ASSIGNED =
-  /\b(?:HOME|USERPROFILE)\b\s*[+:]?=|\b(?:export|set|setx|declare|typeset|readonly|local|Set-Item|New-Item|Set-Variable)\b[^;\n|&]*\b(?:HOME|USERPROFILE)\b/i;
+/** Any mention of HOME or USERPROFILE (top level or nested, sticky) means ~ may no longer be the real home. */
+const HOME_WORD = /\b(?:HOME|USERPROFILE)\b/i;
+const ABSOLUTE = /^(?:[A-Za-z]:[\\/]|[\\/]|~)/;
+/** Git subcommands whose rules depend on the working directory. */
+const CWD_GIT = new Set(['reset', 'clean', 'checkout', 'switch', 'restore', 'commit', 'add', 'stage', 'update-index', 'push']);
 
-const isPipe =(op: string): boolean => op.endsWith('|') && !op.endsWith('||');
+const unresolvedCwd = (what: string): Decision =>
+  ask('unresolved-cwd', `${what} depends on the working directory, which an earlier cd made unknown. Use absolute paths or run it separately.`);
+
+const isPipe = (op: string): boolean => op.endsWith('|') && !op.endsWith('||');
 
 function changeDirectory(simple: Simple, state: ScanState, ctx: Ctx, mayFail: boolean): void {
   const target = simple.argv.find((arg) => !arg.startsWith('-') || arg === '-') ?? '~';
-  if (target === '-') return;
-  const expanded = expandIn(ctx, target);
-  if (expanded === null || expanded === '') return;
+  const expanded = target === '-' ? null : expandIn(ctx, target);
+  if (expanded === null || expanded === '') {
+    state.cwdUnknown = true;
+    return;
+  }
+  if (ABSOLUTE.test(expanded)) state.cwdUnknown = false;
   const before = [state.cwd, ...state.alt];
   const after = before.map((dir) => ctx.paths.resolve(dir, expanded));
   const all = [...new Set(mayFail ? [...after, ...before] : after)].slice(0, MAX_CWDS);
@@ -36,6 +44,7 @@ function gitDecisions(simple: Simple, state: ScanState, ctx: Ctx, scanNested: (s
   const env = { ...state.env, ...simple.env };
   const found: Decision[] = [];
   const primary = parseGitCall(simple.argv, state.cwd, env, ctx, state);
+  if (state.cwdUnknown === true && CWD_GIT.has(primary.sub)) return [unresolvedCwd(`git ${primary.sub}`)];
   const calls: GitCall[] = [primary, ...state.alt.map((cwd) => parseGitCall(simple.argv, cwd, env, ctx, state))];
   for (const call of calls) {
     const decision = evaluateGit(call, ctx);
@@ -50,6 +59,17 @@ function gitDecisions(simple: Simple, state: ScanState, ctx: Ctx, scanNested: (s
   return found;
 }
 
+/** True when a delete or find has a path argument that is relative (find with no path defaults to "."). */
+function relativeTarget(simple: Simple): boolean {
+  if (simple.name !== 'find') return simple.argv.some((arg) => !arg.startsWith('-') && !ABSOLUTE.test(arg));
+  const starts: string[] = [];
+  for (const arg of simple.argv) {
+    if (arg.startsWith('-') || arg === '(' || arg === '!') break;
+    starts.push(arg);
+  }
+  return starts.length === 0 || starts.some((arg) => !ABSOLUTE.test(arg));
+}
+
 function evaluateSimple(simple: Simple, state: ScanState, ctx: Ctx, flow: Flow, scanNested: (script: string, kind: Dialect) => Decision[]): Decision[] {
   const found: Decision[] = [];
   const indirect = evaluateIndirection(simple, flow);
@@ -57,6 +77,8 @@ function evaluateSimple(simple: Simple, state: ScanState, ctx: Ctx, flow: Flow, 
   const cwds = [state.cwd, ...state.alt];
   if (simple.name === 'git') {
     found.push(...gitDecisions(simple, state, ctx, scanNested));
+  } else if ((isDeleter(simple.name) || simple.name === 'find') && state.cwdUnknown === true && relativeTarget(simple)) {
+    found.push(unresolvedCwd(`${simple.name} with a relative path`));
   } else if (isDeleter(simple.name)) {
     for (const cwd of cwds) {
       const decision = evaluateDelete(simple, cwd, ctx, flow.piped);
@@ -78,7 +100,7 @@ export function scan(command: string, dialect: Dialect, ctx: Ctx, state: ScanSta
   if (depth > MAX_DEPTH) {
     return [ask('unscannable-command', 'The command nests shells too deeply to inspect. Run it as separate, simple commands.')];
   }
-  if (depth === 0 && HOME_ASSIGNED.test(command)) ctx = { ...ctx, homeAssigned: true };
+  if (HOME_WORD.test(command)) ctx.taint.home = true;
   const tokens = tokenize(command, dialect);
   const found: Decision[] = [];
   const scanNested = (script: string, kind: Dialect): Decision[] => scan(script, kind, ctx, cloneState(state), depth + 1);

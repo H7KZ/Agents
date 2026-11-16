@@ -259,7 +259,8 @@ describe('tilde with an assigned HOME', () => {
       ['rm -rf ~/x', RM],
       ['rm -rf ~/', RM],
       ['export FOO=1; rm -rf ~', RM],
-      ['echo $HOME; rm -rf ~', RM],
+      ['echo done; rm -rf ~', RM],
+      ['echo $HOME; rm -rf ~', RM_ASK],
       ['git -C ~ status', null],
     ]);
   });
@@ -281,5 +282,63 @@ describe('tilde with an assigned HOME', () => {
       ["Set-Item env:HOME 'C:\\'; Remove-Item -Recurse -Force ~", RM_ASK],
       ['Remove-Item -Recurse -Force ~', RM],
     ]);
+  });
+});
+
+describe('unknown working directory and sticky HOME', () => {
+  const CWD = 'ask:unresolved-cwd';
+
+  it('an unresolvable cd makes relative deletes, finds and cwd-dependent git ask', () => {
+    table({ dirty: true }, [
+      ['cd "$X" && rm -rf dist', CWD],
+      ['cd $(mktemp -d) && rm -rf dist', CWD],
+      ['cd `pwd`/x; rm -rf dist', CWD],
+      ['cd ""; rm -rf dist', CWD],
+      ['cd -; rm -rf dist', CWD],
+      ['pushd "$D"; rm -rf ./x', CWD],
+      ['cd "$X" && find . -delete', CWD],
+      ['cd "$X" && find -delete', CWD],
+      ['cd "$X" && find -H dist -delete', CWD],
+      ['cd "$X" && find dist -delete', CWD],
+      ['cd "$X" && git reset --hard', CWD],
+      ['cd "$X" && git clean -fd', CWD],
+      ['cd "$X" && git commit -m x', CWD],
+      ['cd "$X" && git add .', CWD],
+      ['cd "$X" && git push -f origin feature', CWD],
+      ['cd "$X" && git status', null],
+      ['cd "$X" && git log', null],
+    ]);
+    table({ dialect: 'ps' }, [
+      ['Set-Location $x; Remove-Item -Recurse -Force dist', CWD],
+      ['cd $x; ri -r -fo dist', CWD],
+    ]);
+  });
+
+  it('absolute targets are still checked, and an absolute cd restores knowledge', () => {
+    table({}, [
+      ['cd "$X" && rm -rf /etc', RM],
+      ['cd "$X" && rm -rf /repo/dist', null],
+      ['cd "$X" && rm -rf ~/x', RM],
+      ['cd "$X" && find /etc -delete', RM],
+      ['cd "$X"; cd /repo; rm -rf dist', null],
+      ['cd "$X"; cd sub; rm -rf dist', CWD],
+      ['cd "$X" && cd /repo/sub && rm -rf dist', null],
+      ['cd "$X" && ls && rm -f dist', CWD],
+      ['(cd "$X"); rm -rf dist', null],
+    ]);
+  });
+
+  it('a mention of HOME or USERPROFILE anywhere makes ~ unresolved, nested or not', () => {
+    table({}, [
+      ['echo $HOME; rm -rf ~', RM_ASK],
+      ['echo userprofile; rm -rf ~/x', RM_ASK],
+      ['bash -c \'echo $HOME\'; rm -rf ~', RM_ASK],
+      ['echo $(echo $HOME); rm -rf ~', RM_ASK],
+      ['rm -rf ~/x; echo $HOME', RM_ASK],
+      ['echo homework; rm -rf ~', RM],
+      ['echo $HOMEDIR; rm -rf ~', RM],
+    ]);
+    const encoded = Buffer.from('$env:HOME = 1', 'utf16le').toString('base64');
+    table({ dialect: 'ps' }, [[`powershell -EncodedCommand ${encoded}; Remove-Item -Recurse -Force ~\\x`, RM_ASK]]);
   });
 });

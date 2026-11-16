@@ -123,12 +123,12 @@ describe('recursive force delete on posix', () => {
       ['cd /repo && rm -rf .', BLOCK],
       ['cd ~ && rm -rf *', BLOCK],
       ['cd && rm -rf *', BLOCK],
-      ['cd - && rm -rf dist', null],
-      ['cd $UNKNOWN && rm -rf dist', null],
+      ['cd - && rm -rf dist', 'ask:unresolved-cwd'],
+      ['cd $UNKNOWN && rm -rf dist', 'ask:unresolved-cwd'],
       ['cd -P /tmp && rm -rf x', BLOCK],
       ['cd /tmp; rm -rf x', BLOCK],
       ['pushd /tmp && rm -rf x', BLOCK],
-      ['cd "" && rm -rf dist', null],
+      ['cd "" && rm -rf dist', 'ask:unresolved-cwd'],
     ]);
   });
 
