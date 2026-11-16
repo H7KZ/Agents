@@ -7,7 +7,7 @@ import { LENSES } from '../../plugins/h7/scripts/review-lenses.ts';
 
 const plugin = join(import.meta.dirname, '../../plugins/h7');
 const skillDir = join(plugin, 'skills/review');
-const skill = readFileSync(join(skillDir, 'SKILL.md'), 'utf8');
+const skill = readFileSync(join(skillDir, 'SKILL.md'), 'utf8').replace(/\r/g, '');
 
 describe('review skill', () => {
   it('passes the skill linter and stays under the size limit', () => {

@@ -7,7 +7,7 @@ import { LAYERS } from '../../plugins/h7/scripts/verify-state.ts';
 
 const plugin = join(import.meta.dirname, '../../plugins/h7');
 const skillDir = join(plugin, 'skills/verify');
-const skill = readFileSync(join(skillDir, 'SKILL.md'), 'utf8');
+const skill = readFileSync(join(skillDir, 'SKILL.md'), 'utf8').replace(/\r/g, '');
 
 describe('verify skill', () => {
   it('passes the skill linter and stays under the size limit', () => {
