@@ -63,7 +63,7 @@ export function computeScope(run: Runner, cwd: string, base?: string): Scope {
   if (resolved === undefined) throw new Error('no base branch found (tried origin/main, origin/master, main, master); pass --base <ref>');
   if (ok(run, cwd, ['rev-parse', '--verify', '--quiet', `${resolved}^{commit}`]) === null) throw new Error(`base ${resolved} is not a commit; pass --base <ref>`);
   const mergeBase = (ok(run, cwd, ['merge-base', 'HEAD', resolved]) ?? resolved).trim();
-  const diff = ok(run, cwd, ['-c', 'core.quotepath=false', 'diff', '--unified=0', '--no-color', '--no-ext-diff', '--no-renames', mergeBase]);
+  const diff = ok(run, cwd, ['-c', 'core.quotepath=false', 'diff', '--unified=0', '--no-color', '--no-ext-diff', '--no-textconv', '--no-renames', mergeBase]);
   if (diff === null) throw new Error('git diff failed; cannot compute the change scope');
   const untracked = ok(run, cwd, ['ls-files', '--others', '--exclude-standard', '-z']);
   if (untracked === null) throw new Error('git ls-files failed; cannot compute the change scope');

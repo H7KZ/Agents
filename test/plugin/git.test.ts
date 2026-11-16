@@ -195,7 +195,7 @@ describe('git executable resolution', () => {
   });
 
   it('forces a locked-down environment', () => {
-    assert.deepEqual(hardenedEnv({ A: '1', GIT_OPTIONAL_LOCKS: '1' }), { A: '1', GIT_CONFIG_NOSYSTEM: '1', GIT_OPTIONAL_LOCKS: '0', GIT_TERMINAL_PROMPT: '0' });
+    assert.deepEqual(hardenedEnv({ A: '1', GIT_OPTIONAL_LOCKS: '1' }), { A: '1', GIT_ATTR_NOSYSTEM: '1', GIT_CONFIG_NOSYSTEM: '1', GIT_OPTIONAL_LOCKS: '0', GIT_TERMINAL_PROMPT: '0' });
   });
 });
 

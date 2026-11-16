@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
-import { writeFileSync } from 'node:fs';
-import { join } from 'node:path';
+import { existsSync, rmSync, writeFileSync } from 'node:fs';
+import { join, sep } from 'node:path';
 import { describe, it } from 'node:test';
 import type { RunResult, Runner } from '../../plugins/h7/scripts/git.ts';
 import { classify, computeScope, main, parseDiff } from '../../plugins/h7/scripts/verify-scope.ts';
@@ -103,7 +103,7 @@ describe('computeScope', () => {
         { path: 'src/new.ts', kind: 'source', ranges: [], whole: true },
       ],
     });
-    assert.ok(seen.some((s) => s.includes('diff --unified=0 --no-color --no-ext-diff --no-renames abc123')));
+    assert.ok(seen.some((s) => s.includes('diff --unified=0 --no-color --no-ext-diff --no-textconv --no-renames abc123')));
   });
 
   it('prefers origin/main over main when both exist', () => {
@@ -204,3 +204,28 @@ function fakeRunnerFromGit(dir: string): Runner {
     }
   };
 }
+
+describe('verify-scope hardening', () => {
+  it('never runs a textconv driver configured in the repository', SLOW, () => {
+    const dir = tmpDir();
+    initRepo(dir);
+    const marker = join(dir, 'textconv-ran');
+    const driver = join(dir, 'driver.js');
+    writeTree(dir, {
+      'driver.js': `require('node:fs').writeFileSync(${JSON.stringify(marker)}, 'ran');\nprocess.stdout.write('x');\n`,
+      '.gitattributes': '*.ts diff=evil\n',
+      'a.ts': 'one\n',
+    });
+    git(dir, 'config', 'diff.evil.textconv', `node "${driver.split(sep).join('/')}"`);
+    git(dir, 'add', '.');
+    git(dir, 'commit', '-q', '-m', 'files');
+    writeFileSync(join(dir, 'a.ts'), 'two\n');
+    git(dir, 'diff', '--no-ext-diff');
+    assert.ok(existsSync(marker), 'control: plain git diff runs the driver');
+    rmSync(marker);
+    const result = runNode(script, ['--base', 'HEAD'], { cwd: dir });
+    assert.equal(result.status, 0, result.stderr);
+    assert.deepEqual(JSON.parse(result.stdout).files.map((f: { path: string }) => f.path), ['a.ts']);
+    assert.equal(existsSync(marker), false);
+  });
+});

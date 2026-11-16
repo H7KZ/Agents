@@ -25,7 +25,7 @@ export interface Git {
   ignoredFiles(cwd: string): string[];
 }
 
-const SAFE_ARGS = ['-c', 'core.fsmonitor=false', '-c', 'core.untrackedCache=false', '-c', `core.hooksPath=${devNull}`, '-c', 'protocol.ext.allow=never'];
+const SAFE_ARGS = ['-c', 'core.fsmonitor=false', '-c', 'core.untrackedCache=false', '-c', `core.hooksPath=${devNull}`, '-c', 'protocol.ext.allow=never', '-c', `core.attributesFile=${devNull}`];
 
 export function resolveGitPath(pathEnv: string, isFile: (path: string) => boolean): string | null {
   for (const dir of pathEnv.split(delimiter)) {
@@ -47,7 +47,7 @@ function isFile(path: string): boolean {
 }
 
 export function hardenedEnv(base: NodeJS.ProcessEnv): NodeJS.ProcessEnv {
-  return { ...base, GIT_CONFIG_NOSYSTEM: '1', GIT_OPTIONAL_LOCKS: '0', GIT_TERMINAL_PROMPT: '0' };
+  return { ...base, GIT_ATTR_NOSYSTEM: '1', GIT_CONFIG_NOSYSTEM: '1', GIT_OPTIONAL_LOCKS: '0', GIT_TERMINAL_PROMPT: '0' };
 }
 
 export function makeSpawnRunner(executable: string | null, baseEnv: NodeJS.ProcessEnv = process.env, spawn: typeof spawnSync = spawnSync): Runner {
