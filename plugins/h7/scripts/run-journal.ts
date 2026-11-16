@@ -1,8 +1,8 @@
-import { closeSync, fstatSync, mkdirSync, openSync, readFileSync, readSync, readdirSync, renameSync, lstatSync, writeFileSync, writeSync } from 'node:fs';
+import { closeSync, fstatSync, mkdirSync, openSync, readFileSync, readSync, readdirSync, lstatSync, writeSync } from 'node:fs';
 import { dirname, join, resolve } from 'node:path';
 import { spawnRunner } from './git.ts';
 import { countProblem, isPhase, isRunId, makeEvent, makeRunId, parseJournal, progressOf, provenCount, serializeEvent, STALL_LIMIT, summarize, type Observed } from './run-journal-core.ts';
-import { ensureExclude } from './setup-files.ts';
+import { ensureExclude, pathProblem, writeAtomic } from './setup-files.ts';
 import { incomplete, parseState, STATE_FILE } from './verify-state.ts';
 
 export interface Stat {
@@ -16,8 +16,10 @@ export interface JournalIo {
   mkdir(path: string): void;
   read(path: string): string | null;
   readdir(path: string): string[];
-  /** Replace a whole file (temp file plus rename). */
-  write(path: string, text: string): void;
+  /** Why path must not be written under root (a symlink, or resolving outside it), or null. */
+  pathProblem(path: string, root: string): string | null;
+  /** Replace a whole file: exclusive random temp file, containment under root re-checked right before the rename. Throws on any refusal. */
+  write(path: string, text: string, root: string): void;
   /**
    * Append one line in a single O_APPEND write; starts a new line first when the file ends in a torn one. Refuses a line over MAX_LINE_BYTES and a
    * hardlinked file. Known limit: a path can still be swapped for a link between the caller's lstat checks and this open (no O_NOFOLLOW on Windows);
@@ -56,11 +58,8 @@ export const realJournalIo: JournalIo = {
       return [];
     }
   },
-  write(path, text) {
-    const temp = `${path}.${process.pid}.tmp`;
-    writeFileSync(temp, text);
-    renameSync(temp, path);
-  },
+  pathProblem: (path, root) => pathProblem(path, root),
+  write: (path, text, root) => writeAtomic(path, text, root),
   excludePath(root) {
     const result = spawnRunner(['rev-parse', '--git-path', 'info/exclude'], root);
     return result.status === 0 ? resolve(root, result.stdout.trim()) : null;
@@ -175,17 +174,18 @@ function start(root: string, args: string[], env: Env): void {
   checkLinks(root, ['.h7', 'runs', CURRENT], io);
   const exclude = io.excludePath(root);
   if (exclude === null) throw new Failure('cannot locate the git exclude file (is git installed and is this a repository?); nothing written');
+  const current = join(root, RUNS_DIR, CURRENT);
+  const gitDir = dirname(dirname(exclude));
+  const problem = io.pathProblem(current, root) ?? io.pathProblem(exclude, gitDir);
+  if (problem !== null) throw new Failure(`${problem}; nothing written`);
   const excluded = ensureExclude(io.read(exclude));
-  if (excluded.status !== 'unchanged') {
-    io.mkdir(dirname(exclude));
-    io.write(exclude, excluded.text);
-  }
+  if (excluded.status !== 'unchanged') io.write(exclude, excluded.text, gitDir);
   const base = makeRunId(io.now(), values['--task'] ?? '');
   let id = base;
   for (let n = 2; io.lstat(join(root, RUNS_DIR, id)) !== null; n += 1) id = `${base}-${n}`;
   io.mkdir(join(root, RUNS_DIR, id));
   io.append(join(root, RUNS_DIR, id, JOURNAL), serializeEvent(makeEvent('note', { event: 'start', task: values['--task'] ?? '' }, io.now())));
-  io.write(join(root, RUNS_DIR, CURRENT), `${id}\n`);
+  io.write(current, `${id}\n`, root);
   env.out(JSON.stringify({ id, dir: `${RUNS_DIR}/${id}`, journal: `${RUNS_DIR}/${id}/${JOURNAL}`, exclude, excluded: true }));
 }
 

@@ -1,5 +1,5 @@
 import assert from 'node:assert/strict';
-import { existsSync, linkSync, mkdirSync, readFileSync, symlinkSync, writeFileSync } from 'node:fs';
+import { existsSync, linkSync, mkdirSync, readFileSync, readdirSync, rmSync, symlinkSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { describe, it } from 'node:test';
 import { cleanupTmp, git, initRepo, runNode, SLOW, tmpDir } from '../../scripts/test/helpers.ts';
@@ -19,6 +19,8 @@ interface Fake extends JournalIo {
   /** What git reports as info/exclude; null means git cannot say. */
   exclude: string | null;
   order: string[];
+  /** Paths whose containment check fails, with the reason. */
+  problems: Record<string, string>;
 }
 
 function fake(init: { files?: Record<string, string>; dirs?: string[]; links?: string[] } = {}): Fake {
@@ -28,6 +30,7 @@ function fake(init: { files?: Record<string, string>; dirs?: string[]; links?: s
     links: new Set(init.links ?? []),
     exclude: p('.git', 'info', 'exclude'),
     order: [],
+    problems: {},
     now: () => NOW,
     lstat(path): Stat | null {
       const link = state.links.has(path);
@@ -40,6 +43,7 @@ function fake(init: { files?: Record<string, string>; dirs?: string[]; links?: s
     },
     read: (path) => state.files[path] ?? null,
     readdir: (path) => [...state.dirs].filter((d) => d !== path && join(d, '..') === path).map((d) => d.slice(path.length + 1)),
+    pathProblem: (path) => state.problems[path] ?? null,
     write(path, text) {
       state.order.push(`write ${path}`);
       state.files[path] = text;
@@ -106,6 +110,17 @@ describe('run-journal start', () => {
     assert.match(r.err[0] as string, /cannot locate the git exclude file/);
     assert.deepEqual(io.order, []);
     assert.ok(!io.dirs.has(p('.h7', 'runs')));
+  });
+
+  it('refuses, writing nothing, when CURRENT or the exclude file fails the containment check', () => {
+    for (const bad of [CURRENT, EXCLUDE]) {
+      const io = fake();
+      io.problems[bad] = 'refusing path outside the repo';
+      const r = run(io, ['start']);
+      assert.equal(r.code, 2, bad);
+      assert.match(r.err[0] as string, /outside the repo; nothing written/);
+      assert.deepEqual(io.order, []);
+    }
   });
 
   it('refuses symlinked .h7, runs or CURRENT', () => {
@@ -352,6 +367,54 @@ describe('run-journal on disk', () => {
     assert.equal(main(['start'], env(tree)), 0);
     assert.equal(git(tree, 'status', '--porcelain'), '');
     assert.match(readFileSync(join(dir, '.git', 'info', 'exclude'), 'utf8'), /^\.h7\/$/m);
+  });
+
+  const outside = (t: { skip(why: string): void }, make: (dir: string, away: string) => void): { dir: string; away: string } | null => {
+    const dir = repo();
+    const away = tmpDir();
+    try {
+      make(dir, away);
+    } catch {
+      t.skip('cannot create symlinks here');
+      return null;
+    }
+    return { dir, away };
+  };
+
+  it('refuses a real symlinked CURRENT and never writes through it', (t) => {
+    const target = join(tmpDir(), 'victim.txt');
+    writeFileSync(target, 'keep');
+    const made = outside(t, (dir) => {
+      mkdirSync(join(dir, '.h7', 'runs'), { recursive: true });
+      symlinkSync(target, join(dir, '.h7', 'runs', 'CURRENT'), 'file');
+    });
+    if (made === null) return;
+    assert.equal(main(['start'], env(made.dir)), 2);
+    assert.equal(readFileSync(target, 'utf8'), 'keep');
+  });
+
+  it('does not write through a symlink planted at the old predictable temp name', (t) => {
+    const target = join(tmpDir(), 'victim.txt');
+    writeFileSync(target, 'keep');
+    const made = outside(t, (dir) => {
+      mkdirSync(join(dir, '.h7', 'runs'), { recursive: true });
+      symlinkSync(target, join(dir, '.h7', 'runs', `CURRENT.${process.pid}.tmp`), 'file');
+    });
+    if (made === null) return;
+    assert.equal(main(['start'], env(made.dir)), 0);
+    assert.equal(readFileSync(target, 'utf8'), 'keep');
+    assert.match(readFileSync(join(made.dir, '.h7', 'runs', 'CURRENT'), 'utf8'), /-run\n$/);
+  });
+
+  it('refuses an exclude file reached through a junction that leaves the git directory', (t) => {
+    const made = outside(t, (dir, away) => {
+      rmSync(join(dir, '.git', 'info'), { recursive: true, force: true });
+      symlinkSync(away, join(dir, '.git', 'info'), 'junction');
+    });
+    if (made === null) return;
+    assert.equal(main(['start'], env(made.dir)), 2);
+    assert.deepEqual(readdirSync(made.away), []);
+    assert.ok(!existsSync(join(made.dir, '.h7', 'runs')));
   });
 
   it('writes nothing when git cannot answer', () => {
