@@ -315,6 +315,35 @@ export function locateMarker(cwd: string, io: FsIo, home: string): Located | nul
   return null;
 }
 
+/**
+ * The declared scratch directory of the nearest trusted marker above cwd (resolved, real path inside the workspace, not the workspace root, not inside
+ * a repo), as a one-element list; empty for anything doubtful. The guard counts deletes strictly inside it as inside the repo.
+ */
+export function scratchDirs(cwd: string, io: FsIo, home: string): string[] {
+  try {
+    const found = locateMarker(cwd, io, home);
+    if (found === null || found.marker.scratch === null) return [];
+    const root = canonicalPath(io, found.dir);
+    const scratch = canonicalPath(io, path.join(root, found.marker.scratch));
+    const repos = [...found.marker.repos.keys()].map((key) => canonicalPath(io, path.join(root, key)));
+    const ok = inside(root, scratch) && fold(scratch) !== fold(root) && !repos.some((repo) => inside(repo, scratch));
+    return ok ? [scratch] : [];
+  } catch {
+    return [];
+  }
+}
+
+/** The guard's temp-dir info extended with the workspace scratch directory, looked up only when a delete rule reads it. */
+export function withScratch(dirs: string[], cwd: string, home: string, io: FsIo = realFsIo): { readonly dirs: string[] } {
+  let cached: string[] | null = null;
+  return {
+    get dirs() {
+      cached ??= [...dirs, ...scratchDirs(cwd, io, home)];
+      return cached;
+    },
+  };
+}
+
 export function findWorkspace(cwd: string, io: FsIo = realFsIo, home: string = defaultHome()): Workspace | null {
   const repoRoot = findRepoRoot(cwd, io);
   return repoRoot === null ? null : workspaceFor(repoRoot, io, home);

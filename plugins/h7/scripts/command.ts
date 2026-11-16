@@ -130,6 +130,41 @@ export function nestedScript(simple: Simple): Nested | null {
   return null;
 }
 
+/** What a `wsl.exe` call runs inside Linux: its argv as a shell script the guard can scan like any other, or why that cannot be told. */
+export type Wsl = { script: string; cwd: boolean } | { ask: string };
+
+const WSL_VALUE = new Set(['-d', '--distribution', '-u', '--user', '--shell-type', '--cd']);
+const WSL_PLAIN = new Set(['--system', '-l', '--list', '-v', '--verbose', '--status', '--version', '--help', '--online', '-o', '--running', '-q', '--quiet', '--all']);
+const WSL_ASK = 'wsl with this command line runs code the guard cannot read. Use wsl [-d <distro>] --exec <program> <args> (for example --exec bash -lc "<commands>").';
+const shellQuote = (word: string): string => `'${word.replaceAll("'", "'\\''")}'`;
+
+/**
+ * `wsl.exe [-d d] [-u u] [--cd dir] --exec|-e|-- <program> <args>` runs program with exactly those arguments, so it is scanned like the same command
+ * run directly (`--exec bash -lc 'x'` is `bash -c 'x'`). Fail closed: an option or form the guard does not know, a command without --exec (the Linux
+ * shell would re-parse the line), or --exec with nothing after it asks. `--cd` makes relative paths unresolved. Management calls such as `wsl -l` pass.
+ */
+export function wslCall(simple: Simple): Wsl | null {
+  if (simple.name !== 'wsl') return null;
+  const { argv } = simple;
+  let cwd = false;
+  let i = 0;
+  for (; i < argv.length; i++) {
+    const arg = argv[i] as string;
+    if (arg === '--exec' || arg === '-e' || arg === '--') {
+      const command = argv.slice(i + 1);
+      return command.length === 0 ? { ask: WSL_ASK } : { script: command.map(shellQuote).join(' '), cwd };
+    }
+    if (WSL_VALUE.has(arg)) {
+      if (argv[i + 1] === undefined) return { ask: WSL_ASK };
+      if (arg === '--cd') cwd = true;
+      i++;
+    } else if (!WSL_PLAIN.has(arg)) {
+      return { ask: WSL_ASK };
+    }
+  }
+  return null;
+}
+
 export interface ParseSpec {
   valueShort?: string;
   attachedShort?: string;

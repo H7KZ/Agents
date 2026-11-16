@@ -5,6 +5,7 @@ import { createGit, snapshotRunner, spawnRunner, type Runner } from './git.ts';
 import { realDisk, type Disk } from './gitfiles.ts';
 import { appendDisabledOnce, appendLog, type LogEntry } from './log.ts';
 import { makePaths, type Realpath } from './paths.ts';
+import { withScratch } from './workspace.ts';
 import { pickDecision, scan } from './scan.ts';
 import { takeSnapshot } from './snapshot.ts';
 import { newState, IGNORED_LOSS, type Ctx, type Decision } from './types.ts';
@@ -212,7 +213,7 @@ export function run(stdinText: string, env: Record<string, string | undefined>, 
     const candidates = [...new Set([io.tmpdir, ...posixTemp].map((dir) => paths.resolve(cwd, dir)))];
     // A temp dir that contains the working directory or the home directory must not whitelist them.
     const dirs = candidates.filter((dir) => !paths.isInside(dir, cwd) && !paths.isInside(dir, paths.resolve(cwd, home)));
-    const ctx: Ctx = { cwd, home, paths, git: createGit(io.runner, disk), disk, taint: { home: false }, tmp: { dirs } };
+    const ctx: Ctx = { cwd, home, paths, git: createGit(io.runner, disk), disk, taint: { home: false }, tmp: withScratch(dirs, cwd, paths.resolve(cwd, home)) };
     const found = scan(command, input.tool_name === 'PowerShell' ? 'ps' : 'sh', ctx, newState(cwd));
     const snapshot = snapshotsFor(found, command, ctx, io);
     // The dirty-tree block is dropped when it was snapshotted, and when a stronger unrelated block names the real reason.

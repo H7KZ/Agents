@@ -1,4 +1,4 @@
-import { assignmentsOf, nestedScript, parseSimple, type Simple } from './command.ts';
+import { assignmentsOf, nestedScript, parseSimple, wslCall, type Simple } from './command.ts';
 import { evaluateDelete, evaluateFind, isDeleter } from './rules-delete.ts';
 import { evaluateDeploy } from './rules-deploy.ts';
 import { aliasDefinitions, applyGitEffects, evaluateGit, parseGitCall, type GitCall } from './rules-git.ts';
@@ -130,6 +130,9 @@ export function scan(command: string, dialect: Dialect, ctx: Ctx, state: ScanSta
     found.push(...evaluateSimple(simple, state, ctx, flow, scanNested));
     const inner = nestedScript(simple);
     if (inner) found.push(...scanNested(inner.script, inner.dialect));
+    const wsl = wslCall(simple);
+    if (wsl !== null && 'ask' in wsl) found.push(ask('wsl-exec', wsl.ask));
+    else if (wsl !== null) found.push(...scan(wsl.script, 'sh', ctx, wsl.cwd ? { ...cloneState(state), cwdUnknown: true } : cloneState(state), depth + 1));
     // Only `cd x || exit` at the top level proves the later commands run in the new directory.
     if (LEAVERS.has(simple.name) && level === 0 && op === '||' && afterCd) state.alt = [];
     if (DIRECTORY_CHANGERS.has(simple.name)) {
