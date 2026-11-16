@@ -125,7 +125,7 @@ export const realRead: Read = (file) => {
 };
 
 /** Lens hint from `.../security.md`: the file's base name without extension. */
-const hintOf = (file: string): string => (file.split(/[\\/]/).pop() ?? file).replace(/\.[^.]*$/, '');
+const hintOf = (file: string): string => (file.split(/[\\/]/).at(-1) as string).replace(/\.[^.]*$/, '');
 
 export function summarize(files: string[], read: Read): Summary {
   const reports: Report[] = [];
