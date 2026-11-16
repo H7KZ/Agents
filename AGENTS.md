@@ -22,7 +22,7 @@ scripts/                          repo tooling: lint-skills.ts, check-manifests.
 - `npm ci` install dev tooling (TypeScript 5.9, @types/node, fast-check, Stryker)
 - `npm run check` typecheck, skill lint, manifest check, all tests (fast, run before every commit)
 - `npm run test:coverage` tests with 100% line/branch/function gate
-- `npm run mutation` Stryker (tap-runner, perTest, incremental in reports/stryker-incremental.json), break 80; full run about 9 min locally, unchanged rerun about 15 s; CI is incremental from the cache saved on main (25 min cap, changed files only without a cache), full run weekly in mutation-full.yml; spawning tests are skipped via H7_MUTATION=1
+- `npm run mutation` Stryker (tap-runner, perTest, incremental in reports/stryker-incremental.json), break 80; full run about 9 min locally, unchanged rerun about 15 s; CI never runs it unless dispatched by hand (mutation-full.yml, 120 min cap; runner minutes are limited)
 - `claude plugin validate ./plugins/h7` and `claude plugin validate .` (the "no version" warning is intended)
 
 ## Hard rules
@@ -53,9 +53,9 @@ scripts/                          repo tooling: lint-skills.ts, check-manifests.
 | Valid JSON manifests | `scripts/check-manifests.ts`; `claude plugin validate` in CI |
 | Skills: name equals dir, description at most 1024, user-only, at most 500 lines, links resolve | `scripts/lint-skills.ts` (`npm run lint:skills`) |
 | Agents have name and description | `scripts/lint-skills.ts` |
-| 100% coverage | `npm run test:coverage` (CI, all 6 matrix cells) |
-| Mutation score at least 80 | `npm run mutation` (CI job) |
-| Works on Windows, macOS, Linux, Node 22.18 and 24 | `.github/workflows/ci.yml` matrix |
+| 100% coverage | `npm run test:coverage` (CI, 3 matrix cells) |
+| Mutation score at least 80 | `npm run mutation` (local, run before merge; CI runs it only by manual dispatch) |
+| Works on Windows and Linux, Node 22.18 and 24 (macOS only checked locally or by hand) | `.github/workflows/ci.yml` matrix |
 | Guard blocks force push to protected branches (and deleting them), hook skipping (flags, abbreviations, core.hooksPath outside the repo; inside the repo only .husky, .githooks, .git/hooks pass, others ask), destructive git on a dirty tree (tracked changes; untracked for `git clean`), secret commits (high-confidence names, `.pem` with a private key), recursive deletes outside repo, `rm -rf .git`, `find -delete` outside repo | `test/plugin/rules-*.test.ts`, `hardening.test.ts`, `uncertainty.test.ts`, `guard.e2e.ts` |
 | Guard asks for protected pushes, deploy/publish (option-aware, wrappers, `--dry-run` allowed), ambiguous secrets, history rewrites, stash drop, git aliases | `test/plugin/rules-git.test.ts`, `rules-deploy.test.ts`, `hardening.test.ts` |
 | Guard asks on what it cannot resolve: git failing or missing, shell/interpreter stdin, `xargs`, `iex`, variable command words, `cd x || ...`, unresolved targets | `test/plugin/failsafe.test.ts`, `hardening.test.ts`, `uncertainty.test.ts`, `braces.test.ts` |

@@ -3,7 +3,9 @@ name: ci
 on:
   push:
     branches: [main]
+    paths-ignore: ['**/*.md', 'docs/**', 'LICENSE', 'NOTICE']
   pull_request:
+    paths-ignore: ['**/*.md', 'docs/**', 'LICENSE', 'NOTICE']
 
 permissions:
   contents: read
@@ -19,8 +21,10 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        os: [ubuntu-latest, windows-latest, macos-latest]
-        node: [22.18.0, 24.x]
+        include:
+          - { os: ubuntu-latest, node: 22.18.0 }
+          - { os: ubuntu-latest, node: 24.x }
+          - { os: windows-latest, node: 24.x }
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-node@v4
@@ -42,54 +46,3 @@ jobs:
           npx -y @anthropic-ai/claude-code plugin validate ./plugins/h7
           npx -y @anthropic-ai/claude-code plugin validate .
 
-  mutation:
-    name: mutation (ubuntu, node 24.x)
-    runs-on: ubuntu-latest
-    timeout-minutes: 25
-    steps:
-      - uses: actions/checkout@v4
-        with:
-          fetch-depth: 0
-      - uses: actions/setup-node@v4
-        with:
-          node-version: 24.x
-          cache: npm
-      - run: npm ci
-      # Incremental baseline: the newest report saved from main (pull requests may read main's caches).
-      - name: Restore incremental report
-        id: cache
-        uses: actions/cache/restore@v4
-        with:
-          path: reports/stryker-incremental.json
-          key: stryker-${{ github.ref }}-${{ github.sha }}
-          restore-keys: |
-            stryker-${{ github.ref }}-
-            stryker-refs/heads/main-
-      - name: Stryker (break threshold 80)
-        shell: bash
-        env:
-          BASE_REF: ${{ github.base_ref }}
-        run: |
-          if [ -f reports/stryker-incremental.json ]; then
-            echo "Incremental run from cached report"
-            npm run mutation
-            exit $?
-          fi
-          # No cache: mutate only the files changed against the merge-base, never the whole tree.
-          if [ -n "$BASE_REF" ]; then base=$(git merge-base "origin/$BASE_REF" HEAD); else base=$(git rev-parse HEAD~1 2>/dev/null || git rev-parse HEAD); fi
-          files=$(git diff --name-only --diff-filter=d "$base" HEAD -- 'plugins/h7/scripts/*.ts' 'scripts/*.ts' 'bootstrap/*.ts' | { grep -v -e '/test/' -e '.test.ts$' || true; } | paste -sd, -)
-          if [ -z "$files" ]; then echo "No mutable files changed; skipping mutation"; exit 0; fi
-          echo "Changed files only: $files"
-          npm run mutation -- --mutate "$files"
-      - name: Save incremental report
-        if: always() && github.ref == 'refs/heads/main' && hashFiles('reports/stryker-incremental.json') != ''
-        uses: actions/cache/save@v4
-        with:
-          path: reports/stryker-incremental.json
-          key: stryker-${{ github.ref }}-${{ github.sha }}
-      - uses: actions/upload-artifact@v4
-        if: always()
-        with:
-          name: mutation-report
-          path: reports/mutation
-          if-no-files-found: ignore
