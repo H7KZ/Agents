@@ -1,4 +1,5 @@
-import { realpathSync } from 'node:fs';
+import { readFileSync, realpathSync } from 'node:fs';
+import { join } from 'node:path';
 import { homedir, tmpdir } from 'node:os';
 import { createGit, spawnRunner, type Runner } from './git.ts';
 import { realDisk, type Disk } from './gitfiles.ts';
@@ -17,6 +18,35 @@ export interface Deps {
   tmpdir: string;
   fallbackCwd: string;
   now: () => Date;
+  /** Reads <home>/.h7/guard.json; returns null when absent. Defaults to the real file. */
+  readConfig?: (home: string) => string | null;
+}
+
+/** What an ASK decision becomes: a prompt (default), silently allowed, or turned into a block. */
+export type AskMode = 'prompt' | 'allow' | 'deny';
+
+const ASK_MODES: readonly string[] = ['prompt', 'allow', 'deny'];
+
+function readGuardConfig(home: string): string | null {
+  try {
+    return readFileSync(join(home, '.h7', 'guard.json'), 'utf8');
+  } catch {
+    return null;
+  }
+}
+
+/** H7_GUARD_ASK wins over ~/.h7/guard.json {"ask": ...}; anything unknown or unreadable means prompt. */
+export function askMode(env: Record<string, string | undefined>, home: string, read: (home: string) => string | null): AskMode {
+  const fromEnv = env.H7_GUARD_ASK;
+  if (fromEnv !== undefined) return ASK_MODES.includes(fromEnv) ? (fromEnv as AskMode) : 'prompt';
+  const text = read(home);
+  if (text === null) return 'prompt';
+  try {
+    const value = (JSON.parse(text.replace(/^﻿/, '')) as { ask?: unknown }).ask;
+    return typeof value === 'string' && ASK_MODES.includes(value) ? (value as AskMode) : 'prompt';
+  } catch {
+    return 'prompt';
+  }
 }
 
 /** Everything the guard needs, as one object (used by tests that build whole inputs). */
@@ -39,20 +69,26 @@ interface HookInput {
   cwd?: unknown;
 }
 
-function askResult(reason: string, note: string): GuardResult {
+function askResult(reason: string, note: string, mode: AskMode): GuardResult {
+  if (mode === 'allow') return { code: 0, stdout: '', stderr: note === '' ? '' : `${note.trim()}
+` };
+  if (mode === 'deny') {
+    return { code: 2, stdout: '', stderr: `${reason} (h7 guard ask mode is deny: find another way or leave it for the user)${note}
+` };
+  }
   const output = { hookSpecificOutput: { hookEventName: 'PreToolUse', permissionDecision: 'ask', permissionDecisionReason: reason } };
   return { code: 0, stdout: `${JSON.stringify(output)}
 `, stderr: note === '' ? '' : `${note.trim()}
 ` };
 }
 
-function respond(decision: Decision, logError: string | null): GuardResult {
+function respond(decision: Decision, logError: string | null, mode: AskMode): GuardResult {
   const note = logError === null ? '' : ` (could not write guard log: ${logError})`;
   if (decision.decision === 'block') {
     return { code: 2, stdout: '', stderr: `h7 guard blocked [${decision.rule}]: ${decision.reason}${note}
 ` };
   }
-  return askResult(`h7 guard [${decision.rule}]: ${decision.reason}`, note);
+  return askResult(`h7 guard [${decision.rule}]: ${decision.reason}`, note, mode);
 }
 
 export function run(stdinText: string, env: Record<string, string | undefined>, io: Deps): GuardResult {
@@ -64,6 +100,7 @@ export function run(stdinText: string, env: Record<string, string | undefined>, 
     command,
     cwd,
   });
+  const mode = askMode(env, home, io.readConfig ?? readGuardConfig);
   let cwd = io.fallbackCwd;
   let command = '';
   try {
@@ -88,11 +125,11 @@ export function run(stdinText: string, env: Record<string, string | undefined>, 
     const ctx: Ctx = { cwd, home, paths, git: createGit(io.runner, disk), disk, taint: { home: false }, tmp: { dirs } };
     const decision = pickDecision(scan(command, input.tool_name === 'PowerShell' ? 'ps' : 'sh', ctx, newState(cwd)));
     if (decision === null) return ALLOW;
-    return respond(decision, appendLog(home, entry(decision.decision, decision.rule, command, cwd)));
+    return respond(decision, appendLog(home, entry(decision.decision, decision.rule, command, cwd)), mode);
   } catch (error) {
     const message = (error as Error).message;
     const logError = appendLog(home, { ...entry('error', 'internal-error', command, cwd), error: message });
-    return askResult(`h7 guard internal error: ${message}`, logError === null ? '' : `h7 guard: could not write guard log: ${logError}`);
+    return askResult(`h7 guard internal error: ${message}`, logError === null ? '' : `h7 guard: could not write guard log: ${logError}`, mode);
   }
 }
 
