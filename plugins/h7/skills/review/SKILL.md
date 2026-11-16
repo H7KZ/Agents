@@ -34,7 +34,7 @@ node "${CLAUDE_PLUGIN_ROOT}/scripts/review-lenses.ts" .h7/scope.json > .h7/revie
 
 The output has `selected[]` and `skipped[]`, each `{ lens, reason }`, plus `stats`. Rules in the picker: `spec` always; `standards` and `test-quality` when code or tests changed; `adversarial` when source changed; `security` when a path touches auth, input handling, execution, network, hooks, dependency or CI manifests; `performance` for large source changes or hot-path file names; `architecture` for several files or directories or a large change. Pass `--all` when the user asks for every lens.
 
-You may add a skipped lens after skimming the diff (for example `security` for a change that parses untrusted text under an innocuous file name), with a one-line reason. You may not drop a selected lens unless the user says so. Write every skipped lens with its reason to the report (step 9) and to the run journal `.h7/runs/YYYY-MM-DD-<slug>.md` under "Review: skipped lenses".
+You may add a skipped lens after skimming the diff (for example `security` for a change that parses untrusted text under an innocuous file name), with a one-line reason. You may not drop a selected lens unless the user says so. Write every skipped lens with its reason to the report (step 9) and to the run journal with `run-journal.ts append review <json>` (journal at `.h7/runs/<id>/journal.jsonl`), as the event `skipped-lenses`.
 
 ## 3. Reviewer model
 
