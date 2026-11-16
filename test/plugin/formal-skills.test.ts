@@ -51,7 +51,7 @@ describe('formal-maintain', () => {
   const skill = read('formal-maintain');
   it('covers every drift status and the classification of changes', () => {
     for (const status of ['in-sync', 'drifted', 'unknown-sync', 'invalid']) assert.ok(skill.includes(`\`${status}\``), status);
-    for (const phrase of ['no effect', 'model stale', 'promise changed on purpose', 'promise maybe broken', 'Run the model as it stands first', 'break it again', 'Never edit `sync` by hand']) assert.ok(skill.includes(phrase), phrase);
+    for (const phrase of ['no effect', 'model stale', 'promise changed on purpose', 'promise maybe broken', 'Run the model as it stands first', 'break it again', 'Never edit `sync` by hand', 'untrusted repo data', 'verbatim', 'no-models']) assert.ok(skill.includes(phrase), phrase);
   });
   it('has its steps in order', () => {
     const headings = ['## Hard rules', '## 1. Detect drift', '## 2. Run as is', '## 3. Classify each change', '## 4. Update from the code', '## 5. Stamp and commit', '## 6. Report'];
