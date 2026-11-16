@@ -295,6 +295,26 @@ export function workspaceFor(repoRoot: string, io: FsIo, home: string): Workspac
   return null;
 }
 
+export interface Located {
+  dir: string;
+  file: string;
+  marker: Marker;
+}
+
+/** The nearest trusted marker at or above cwd (strictly inside the real home), listing cwd's repo or not. For doctor. Same trust rules and errors as workspaceFor. */
+export function locateMarker(cwd: string, io: FsIo, home: string): Located | null {
+  const realHome = canonicalPath(io, home);
+  if (!inside(realHome, canonicalPath(io, cwd))) return null;
+  for (let dir = canonicalPath(io, cwd); fold(dir) !== fold(realHome); dir = path.dirname(dir)) {
+    const file = path.join(dir, MARKER);
+    if (io.lstat(file) === null) continue;
+    checkOwner(file, 'workspace marker', io);
+    checkOwner(dir, 'workspace directory', io);
+    return { dir, file, marker: readMarker(file, io) };
+  }
+  return null;
+}
+
 export function findWorkspace(cwd: string, io: FsIo = realFsIo, home: string = defaultHome()): Workspace | null {
   const repoRoot = findRepoRoot(cwd, io);
   return repoRoot === null ? null : workspaceFor(repoRoot, io, home);

@@ -76,3 +76,73 @@ export function removeMattpocockLockEntries(home: string, write: (file: string, 
   write(file, (original.startsWith('﻿') ? '﻿' : '') + body + (/\n\s*$/.test(original) ? eol : ''));
   return names.size;
 }
+
+/** Words of 3+ characters, lowercased: path-like tokens (`../../../AGENTS.md` vs `AGENTS.md`) reduce to the same words. */
+const words = (text: string): Set<string> => new Set(text.toLowerCase().match(/[a-z0-9]{3,}/g) ?? []);
+
+/** Jaccard similarity of the word sets of two texts, 0 to 1 (two empty texts: 0). */
+export function similarity(a: string, b: string): number {
+  const left = words(a);
+  const right = words(b);
+  let shared = 0;
+  for (const word of left) if (right.has(word)) shared += 1;
+  const total = left.size + right.size - shared;
+  return total === 0 ? 0 : shared / total;
+}
+
+export const SIMILAR = 0.6;
+
+/** SKILL.md text of every skill the installed mattpocock plugin ships, by skill name. Unreadable installs contribute nothing. */
+export function pluginSkillTexts(home: string): Map<string, string> {
+  const texts = new Map<string, string>();
+  const installs = (readJson(join(home, '.claude', 'plugins', 'installed_plugins.json'))?.plugins as Record<string, unknown> | undefined)?.[OFFICIAL_PLUGIN];
+  for (const install of Array.isArray(installs) ? installs : []) {
+    const base = (install as { installPath?: unknown } | null)?.installPath;
+    if (typeof base !== 'string') continue;
+    let names: string[];
+    try {
+      names = readdirSync(join(base, 'skills'));
+    } catch {
+      continue;
+    }
+    for (const name of names) {
+      try {
+        texts.set(name, readFileSync(join(base, 'skills', name, 'SKILL.md'), 'utf8'));
+      } catch {
+        // a skill dir without SKILL.md is not a skill
+      }
+    }
+  }
+  return texts;
+}
+
+/**
+ * Real directories (not the symlinks `duplicateSkillLinks` finds) in the given skills folders that are copies of a mattpocock skill: the name is a
+ * mattpocock skill (plugin or install lock) and, when the plugin copy is readable, the text is at least SIMILAR to it. Installer-mangled copies match.
+ */
+export function unmarkedCopies(home: string, dirs: string[]): string[] {
+  const plugin = pluginSkillTexts(home);
+  const names = new Set([...mattpocockSkillNames(home), ...plugin.keys()]);
+  const found: string[] = [];
+  for (const dir of dirs) {
+    let entries: string[];
+    try {
+      entries = readdirSync(dir);
+    } catch {
+      continue;
+    }
+    for (const entry of entries.sort()) {
+      const skill = join(dir, entry);
+      if (!names.has(entry) || lstatSync(skill).isSymbolicLink()) continue;
+      let text: string;
+      try {
+        text = readFileSync(join(skill, 'SKILL.md'), 'utf8');
+      } catch {
+        continue;
+      }
+      const original = plugin.get(entry);
+      if (original === undefined || similarity(text, original) >= SIMILAR) found.push(skill);
+    }
+  }
+  return found;
+}

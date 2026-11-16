@@ -1,9 +1,11 @@
 import { spawnSync } from 'node:child_process';
 import { statSync } from 'node:fs';
 import { homedir } from 'node:os';
-import { join } from 'node:path';
+import { dirname, join, sep } from 'node:path';
 import { inspectDevLink } from './devlink.ts';
-import { duplicateSkillLinks, installedPlugins, knownMarketplaces, LEGACY_PLUGIN, OFFICIAL_MARKETPLACE, OFFICIAL_MARKETPLACE_SOURCE, OFFICIAL_PLUGIN, readJson } from './duplicates.ts';
+import { loadModels, same } from './models.ts';
+import { locateMarker, realFsIo, WorkspaceError } from './workspace.ts';
+import { duplicateSkillLinks, unmarkedCopies, installedPlugins, knownMarketplaces, LEGACY_PLUGIN, OFFICIAL_MARKETPLACE, OFFICIAL_MARKETPLACE_SOURCE, OFFICIAL_PLUGIN, readJson } from './duplicates.ts';
 
 export type Status = 'pass' | 'warn' | 'fail';
 
@@ -21,6 +23,8 @@ export interface RunResult {
 
 export interface DoctorEnv {
   home: string;
+  /** Where doctor was started; a workspace marker above it is validated. */
+  cwd: string;
   nodeVersion: string;
   run: (command: string, args: string[]) => RunResult;
 }
@@ -85,7 +89,7 @@ function marketplaceChecks(env: DoctorEnv, dev: boolean): Check[] {
     { id: 'marketplace', status: 'pass', detail: local ? 'h7kz is a local directory marketplace (the plugin is copied on install, so edits are NOT live; bootstrap --dev gives live edits)' : 'h7kz marketplace is known' },
     auto
       ? { id: 'auto-update', status: 'pass', detail: local ? 'not needed for a local directory marketplace' : 'autoUpdate is enabled' }
-      : { id: 'auto-update', status: 'fail', detail: 'autoUpdate is not enabled for h7kz', fix: 'Set extraKnownMarketplaces.h7kz.autoUpdate to true in ~/.claude/settings.json (bootstrap does this).' },
+      : { id: 'auto-update', status: 'fail', detail: 'autoUpdate is not enabled for h7kz', fix: 'A plain `claude plugin marketplace add` leaves autoUpdate off. Set extraKnownMarketplaces.h7kz.autoUpdate to true in ~/.claude/settings.json (bootstrap does this).' },
   ];
 }
 
@@ -133,12 +137,63 @@ function mattpocockChecks(env: DoctorEnv): Check[] {
     dupes.push(`${links.length} skill symlink(s) in ~/.claude/skills pointing to ~/.agents/skills (${links.slice(0, 3).map((l) => l.split(/[\\/]/).pop()).join(', ')}${links.length > 3 ? ', ...' : ''})`);
     fixes.push('remove those symlinks (bootstrap lists them and asks first)');
   }
+  const copyDirs = [join(env.home, '.claude', 'skills'), ...workspaceSkillDirs(env)];
+  const copies = unmarkedCopies(env.home, copyDirs);
+  if (copies.length > 0) {
+    dupes.push(`${copies.length} unmarked copy(ies) of mattpocock skills (${copies.slice(0, 3).map((c) => c.split(/[\\/]/).pop()).join(', ')}${copies.length > 3 ? ', ...' : ''}) in ${[...new Set(copies.map((c) => dirname(c).split(sep).join('/')))].join(', ')}`);
+    fixes.push(`delete these copies (the plugin provides them): ${copies.join(', ')}`);
+  }
   checks.push(
     dupes.length === 0
       ? { id: 'mattpocock-duplicates', status: 'pass', detail: 'no duplicate mattpocock/skills copies' }
       : { id: 'mattpocock-duplicates', status: 'fail', detail: `duplicate copies: ${dupes.join('; ')}`, fix: `Run bootstrap with --yes, or manually: ${fixes.join(' and ')}` },
   );
   return checks;
+}
+
+/** The skills folder of the workspace above cwd, when there is a trusted marker (a bad marker is reported by the workspace check, not here). */
+function workspaceSkillDirs(env: DoctorEnv): string[] {
+  try {
+    const found = locateMarker(env.cwd, realFsIo, env.home);
+    return found === null ? [] : [join(found.dir, '.claude', 'skills')];
+  } catch {
+    return [];
+  }
+}
+
+/** Marker discovery and validation: repos exist and are git repos, referenced files exist, no repo carries h7 state of its own. */
+function workspaceCheck(env: DoctorEnv): Check {
+  let found;
+  try {
+    found = locateMarker(env.cwd, realFsIo, env.home);
+  } catch (error) {
+    return { id: 'workspace', status: 'fail', detail: (error as Error).message, fix: 'Fix or remove the marker: a regular JSON file you own, not writable by group or others, in a directory under your home.' };
+  }
+  if (found === null) return { id: 'workspace', status: 'pass', detail: 'no workspace marker: single-repo mode' };
+  const exists = (file: string): boolean => realFsIo.lstat(file) !== null;
+  const problems: string[] = [];
+  const notes: string[] = [];
+  for (const [key, repo] of found.marker.repos) {
+    const dir = join(found.dir, key);
+    if (!exists(join(dir, '.git'))) problems.push(`repo ${key} does not exist or is not a git repository`);
+    for (const state of [join('.h7'), join('docs', 'agents')]) if (exists(join(dir, state))) problems.push(`repo ${key} contains ${state.split(sep).join('/')}/ (workspace mode keeps h7 state outside repos)`);
+    for (const file of [repo.verification, repo.prTemplate]) if (file !== null && !exists(join(found.dir, file))) problems.push(`repo ${key}: ${file} does not exist`);
+  }
+  if (!exists(join(found.dir, found.marker.memory.agents))) notes.push(`${found.marker.memory.agents} does not exist yet (h7:setup creates it)`);
+  const label = `workspace mode: ${found.dir.split(sep).join('/')} (${found.marker.repos.size} repos)`;
+  if (problems.length > 0) return { id: 'workspace', status: 'fail', detail: `${label}; ${problems.join('; ')}`, fix: 'Correct the marker, create the missing files, and move any h7 state out of the repos.' };
+  return notes.length > 0 ? { id: 'workspace', status: 'warn', detail: `${label}; ${notes.join('; ')}` } : { id: 'workspace', status: 'pass', detail: label };
+}
+
+/** A reviewer on the author's model is not independent: say so instead of letting /h7:review quietly run without one. */
+function modelsCheck(env: DoctorEnv): Check {
+  const loaded = loadModels(env.home);
+  if (loaded.status === 'corrupt') return { id: 'models', status: 'warn', detail: `${loaded.file} is not a JSON object`, fix: 'Fix the file: {"author": "...", "reviewer": "..."}' };
+  const { author, reviewer } = loaded.models;
+  if (author !== undefined && reviewer !== undefined && same(author, reviewer)) {
+    return { id: 'models', status: 'warn', detail: `reviewer ${reviewer} is the same model as author ${author}: /h7:review gets no independent reviewer (model: null)`, fix: `Set a different "reviewer" in ${loaded.file}` };
+  }
+  return { id: 'models', status: 'pass', detail: loaded.status === 'missing' ? 'no models.json (reviewer independence is unverified)' : 'reviewer differs from author or is not set against one' };
 }
 
 function h7DirCheck(env: DoctorEnv): Check {
@@ -161,6 +216,8 @@ export function runChecks(env: DoctorEnv): Check[] {
     ...marketplaceChecks(env, inspectDevLink(env.home).state === 'ok'),
     h7PluginCheck(env),
     ...mattpocockChecks(env),
+    workspaceCheck(env),
+    modelsCheck(env),
     h7DirCheck(env),
   ];
 }
@@ -178,5 +235,5 @@ export function main(env: DoctorEnv, out: (text: string) => void): number {
 
 if (import.meta.main) {
   const home = process.env.H7_HOME ?? homedir();
-  process.exitCode = main({ home, nodeVersion: process.versions.node, run: spawnRun }, (text) => console.log(text));
+  process.exitCode = main({ home, cwd: process.cwd(), nodeVersion: process.versions.node, run: spawnRun }, (text) => console.log(text));
 }

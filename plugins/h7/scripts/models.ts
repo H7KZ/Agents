@@ -68,7 +68,7 @@ const canon = (model: string): string => {
   return FAMILY.exec(lower)?.[1] ?? lower.replace(/^claude[-_ ]?/, '');
 };
 
-const same = (a: string, b: string): boolean => canon(a) === canon(b);
+export const same = (a: string, b: string): boolean => canon(a) === canon(b);
 
 /** Reviewer model must differ from the author model. `author` (the running session's model) wins over the configured author. */
 export function pickReviewer(models: Models, author?: string): Reviewer {

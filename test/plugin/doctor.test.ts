@@ -16,6 +16,7 @@ function env(over: Partial<DoctorEnv> & { files?: Record<string, string>; fail?:
   writeTree(home, over.files ?? {});
   return {
     home,
+    cwd: over.cwd ?? home,
     nodeVersion: over.nodeVersion ?? '24.1.0',
     run: over.run ?? ((command, args) => (over.fail?.includes([command, ...args].join(' ')) ? BAD : OK)),
   };
@@ -69,6 +70,8 @@ describe('runChecks on a healthy machine', () => {
       ['h7-plugin', 'pass'],
       ['mattpocock', 'pass'],
       ['mattpocock-duplicates', 'pass'],
+      ['workspace', 'pass'],
+      ['models', 'pass'],
       ['h7-dir', 'pass'],
     ]);
     assert.equal(byId(checks, 'git').detail, 'v 1.0');
@@ -261,7 +264,7 @@ describe('summarize and main', () => {
     const parsed = JSON.parse(out[0] as string);
     assert.equal(parsed.ok, false);
     assert.ok(parsed.fail >= 1);
-    assert.equal(parsed.checks.length, 11);
+    assert.equal(parsed.checks.length, 13);
     assert.deepEqual(Object.keys(parsed).slice(0, 4), ['ok', 'pass', 'warn', 'fail']);
   });
 });
