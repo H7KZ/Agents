@@ -86,7 +86,9 @@ const FILE_TOOLS = new Set(['Write', 'Edit', 'MultiEdit', 'NotebookEdit']);
 // Any mention of the config file name, or a .h7 path segment reached through another directory
 // (~/.h7, $HOME/.h7, $X/.h7, C:\Users\me\.h7). A repo-relative ".h7/..." or "./.h7/..." is not matched.
 const CONFIG_MENTION = /guard["']*\.["']*json|[^\s"'=:.\\/][\\/]+["']*\.h7(?![\w.-])/i;
-const CONFIG_NAME = /guard\.json$/i;
+// The config name anywhere in the target, plus Windows path forms the containment check cannot
+// canonicalise (\\?\, \\.\, UNC shares, NTFS streams after the drive letter): fail closed on those.
+const CONFIG_NAME = /guard\.json|^[\\/]{2}|^.{2,}:/i;
 const CONFIG_REASON =
   'h7 guard state in ~/.h7 (ask-mode config, guard log) is owner-only: agents must not change their own guard policy. Ask the user to edit it.';
 

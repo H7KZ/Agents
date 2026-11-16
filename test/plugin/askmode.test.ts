@@ -1,4 +1,5 @@
 import assert from 'node:assert/strict';
+import { join } from 'node:path';
 import { describe, it } from 'node:test';
 import { askMode, run, type GuardIo } from '../../plugins/h7/scripts/guard-core.ts';
 import type { Runner } from '../../plugins/h7/scripts/git.ts';
@@ -172,6 +173,11 @@ describe('guard config is owner-only', () => {
     assert.equal(at({ file_path: 'a.txt' }), 0);
     assert.equal(at({ file_path: join(home, '.h7x', 'a') }), 0);
     assert.equal(at({ file_path: join(home, 'srv', 'guard.json') }), 2);
+    assert.equal(at({ file_path: `${join(home, 'srv', 'guard.json')}:stream` }), 2);
+    assert.equal(at({ file_path: '\\\\?\\C:\\Users\\me\\x.txt' }), 2);
+    assert.equal(at({ file_path: '//server/share/x.txt' }), 2);
+    assert.equal(at({ file_path: 'C:\\repo\\a.txt:hidden' }), 2);
+    assert.equal(at({ file_path: 'C:\\repo\\a.txt' }), 0);
   });
 
   it('blocks shell commands that reach a .h7 directory through another path, allows repo-relative ones', () => {
