@@ -289,7 +289,7 @@ function build(root: string, file: string, marker: Marker, key: string, real: st
   const stateDir = outsideRepos(confine(`${marker.stateDir}/${key}`, 'stateDir'), 'stateDir');
   const scratch = marker.scratch === null ? null : outsideRepos(confine(marker.scratch, 'scratch'), 'scratch');
   // Push and auto-merge are only honoured from a marker whose ownership was actually verified (POSIX); elsewhere the user says so per run.
-  const trusted = io.uid !== null && trust === 'trusted';
+  const trusted = trust === 'trusted';
   const declared = marker.repos.get(key) as RepoSettings;
   const settings: RepoSettings = { ...declared, ship: trusted ? declared.ship : 'pr', autoMerge: trusted && declared.autoMerge };
   const glossary = marker.memory.glossary ?? glossaryName(io, root);

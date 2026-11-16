@@ -186,11 +186,11 @@ describe('workspace scratch directory', () => {
     assert.deepEqual(scratchOf(s, trustedIo(s.ws, s.home)), []);
   });
 
-  it('gives nothing for an untrusted or changed marker, or where the owner cannot be verified', () => {
+  it('gives nothing for an untrusted or changed marker', () => {
     const s = setup(GOOD);
     assert.deepEqual(scratchOf(s, { ...trustedIo(s.ws, s.home), read: () => { throw new Error('no trust file'); } }), []);
     assert.deepEqual(scratchOf(s, trustedIo(s.ws, s.home, {}, '{"version":1}')), []);
-    assert.deepEqual(scratchOf(s, trustedIo(s.ws, s.home, {}, undefined, null)), []);
+    assert.equal(scratchOf(s, trustedIo(s.ws, s.home, {}, undefined, null)).length, 1);
     assert.equal(scratchOf(s, trustedIo(s.ws, s.home)).length, 1);
     const ctx = ctxFor(s.web, s.home, trustedIo(s.ws, s.home, {}, '{"version":1}'));
     assert.equal(rule(ctx, `rm -rf ${fwd(s.ws)}/tmp/topic`), 'block:recursive-delete');

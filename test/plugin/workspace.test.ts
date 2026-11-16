@@ -393,24 +393,24 @@ describe('marker trust', () => {
     assert.throws(() => findWorkspace(join(ws, 'web'), owned(ws, UID, 0o666), home), /writable by group or others/);
   });
 
-  it('where ownership cannot be checked (Windows) the marker still works, but push and auto-merge are not honoured', () => {
+  it('where ownership cannot be checked (Windows) the vouched marker is honoured: the typed-yes hash is the anchor', () => {
     const { ws, home } = makeWs(RISKY, ['web']);
     trustIt(home, ws);
     const found = findWorkspace(join(ws, 'web'), owned(ws, null, 0o666, 0o777), home);
-    assert.deepEqual([found?.trusted, found?.settings.ship, found?.settings.autoMerge], [false, 'pr', false]);
+    assert.deepEqual([found?.trusted, found?.settings.ship, found?.settings.autoMerge], [true, 'push', true]);
     assert.deepEqual([found?.marker.repos.get('web')?.ship, found?.marker.repos.get('web')?.autoMerge], ['push', true]);
     const s = settings(join(ws, 'web'), owned(ws, null, 0o666), home);
-    assert.deepEqual([s.ship, s.autoMerge], ['pr', false]);
+    assert.deepEqual([s.ship, s.autoMerge], ['push', true]);
   });
 
-  it('property: untrusted markers never yield push or auto-merge', () => {
+  it('property: a vouched marker is honoured whether or not the owner can be checked', () => {
     fc.assert(
       fc.property(fc.boolean(), fc.boolean(), fc.constantFrom('pr', 'push'), (autoMerge, ownerKnown, ship) => {
         const { ws, home } = makeWs({ version: 1, repos: { web: { ship, autoMerge } } }, ['web']);
         trustIt(home, ws);
         const found = findWorkspace(join(ws, 'web'), owned(ws, ownerKnown ? UID : null, 0o600), home);
-        assert.equal(found?.settings.autoMerge, ownerKnown && autoMerge);
-        assert.equal(found?.settings.ship, ownerKnown ? ship : 'pr');
+        assert.equal(found?.settings.autoMerge, autoMerge);
+        assert.equal(found?.settings.ship, ship);
       }),
       { numRuns: runs(30) },
     );
@@ -444,11 +444,11 @@ describe('hash trust', () => {
     assert.equal(findWorkspace(join(ws, 'web'), owned(ws, UID, 0o644), home)?.trust, 'changed');
   });
 
-  it('a trusted hash does not help where ownership cannot be verified', () => {
+  it('a trusted hash is honoured where ownership cannot be verified (Windows)', () => {
     const { ws, home } = makeWs(RISKY, ['web']);
     trustIt(home, ws);
     const found = findWorkspace(join(ws, 'web'), owned(ws, null, 0o644), home);
-    assert.deepEqual([found?.trust, found?.trusted, found?.settings.autoMerge], ['trusted', false, false]);
+    assert.deepEqual([found?.trust, found?.trusted, found?.settings.autoMerge], ['trusted', true, true]);
   });
 
   it('reads the trust file defensively', () => {

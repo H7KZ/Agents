@@ -48,7 +48,7 @@ When h7 is only your personal workflow and the repos belong to a team, nothing o
   "memory": { "agents": "AGENTS.md", "glossary": "GLOSSARY.md", "adr": "docs/adr" } }
 ```
 
-Then journals, verify and review state and CI watcher state live in `<workspace>/.h7/<repo>/`, setup writes only under the workspace (no branch, no commits in the repo), ship reads its settings from the workspace and follows `prTemplate`, and the coverage baseline is built from `git archive` in the OS temp dir. The marker can set a `scratch` dir, push and auto-merge, so those count only after you run `node <plugin>/scripts/workspace.ts trust` in a terminal (it shows the file and needs a typed yes; the hash is kept in an owner-only file under your `.h7` home folder). On Windows ownership cannot be checked, so there they stay off. `/h7:doctor` validates the marker and reports its trust state. Design: [docs/design.md](docs/design.md).
+Then journals, verify and review state and CI watcher state live in `<workspace>/.h7/<repo>/`, setup writes only under the workspace (no branch, no commits in the repo), ship reads its settings from the workspace and follows `prTemplate`, and the coverage baseline is built from `git archive` in the OS temp dir. The marker can set a `scratch` dir, push and auto-merge, so those count only after you run `node <plugin>/scripts/workspace.ts trust` in a terminal (it shows the file and needs a typed yes; the hash is kept in an owner-only file under your `.h7` home folder). On Windows the owner cannot be checked, so the typed-yes hash is the only anchor there. `/h7:doctor` validates the marker and reports its trust state. Design: [docs/design.md](docs/design.md).
 
 ## Commands
 
