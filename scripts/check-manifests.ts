@@ -1,4 +1,4 @@
-import { existsSync, readFileSync } from 'node:fs';
+import { existsSync, readdirSync, readFileSync } from 'node:fs';
 import { join, resolve } from 'node:path';
 
 export interface ManifestProblem {
@@ -34,6 +34,48 @@ function hookArgs(node: unknown, found: string[] = []): string[] {
   return found;
 }
 
+function hookCommands(node: unknown, found: Json[] = []): Json[] {
+  if (Array.isArray(node)) {
+    for (const item of node) hookCommands(item, found);
+  } else if (node !== null && typeof node === 'object') {
+    if ((node as Json).type === 'command') found.push(node as Json);
+    for (const value of Object.values(node)) hookCommands(value, found);
+  }
+  return found;
+}
+
+const IMPORT_SPECIFIER = /(?:\bfrom\s*|\bimport\s*\(?\s*|\brequire\s*\(\s*)(['"])([^'"\n]+)\1/g;
+
+export function nonNodeImports(source: string): string[] {
+  const found: string[] = [];
+  for (const match of source.matchAll(IMPORT_SPECIFIER)) {
+    const specifier = match[2] as string;
+    if (!specifier.startsWith('node:') && !specifier.startsWith('.') && !specifier.startsWith('/')) found.push(specifier);
+  }
+  return found;
+}
+
+function checkRuntimeImports(pluginDir: string, problems: ManifestProblem[]): void {
+  const scripts = join(pluginDir, 'scripts');
+  if (!existsSync(scripts)) return;
+  for (const entry of readdirSync(scripts, { recursive: true, encoding: 'utf8' }).sort()) {
+    if (!entry.endsWith('.ts')) continue;
+    const file = join(scripts, entry);
+    for (const specifier of nonNodeImports(readFileSync(file, 'utf8'))) {
+      problems.push({ file, message: `runtime imports must start with node: or be relative, found "${specifier}"` });
+    }
+  }
+}
+
+function checkPluginPackage(pluginDir: string, problems: ManifestProblem[]): void {
+  const file = join(pluginDir, 'package.json');
+  if (!existsSync(file)) return;
+  const pkg = readJson(file, problems);
+  for (const key of ['dependencies', 'devDependencies', 'peerDependencies', 'optionalDependencies']) {
+    if (pkg && key in pkg) problems.push({ file, message: `plugin package.json must not declare ${key} (zero runtime dependencies)` });
+  }
+}
+
 function checkPlugin(pluginDir: string, entryName: unknown, problems: ManifestProblem[]): void {
   const manifestFile = join(pluginDir, '.claude-plugin', 'plugin.json');
   const manifest = readJson(manifestFile, problems);
@@ -45,9 +87,15 @@ function checkPlugin(pluginDir: string, entryName: unknown, problems: ManifestPr
       problems.push({ file: manifestFile, message: 'version must be omitted (commit SHA is the version)' });
     }
   }
+  checkPluginPackage(pluginDir, problems);
+  checkRuntimeImports(pluginDir, problems);
   const hooksFile = join(pluginDir, 'hooks', 'hooks.json');
   if (!existsSync(hooksFile)) return;
   const hooks = readJson(hooksFile, problems);
+  for (const hook of hookCommands(hooks)) {
+    const exec = hook.command === 'node' && Array.isArray(hook.args) && hook.args.every((a) => typeof a === 'string');
+    if (!exec) problems.push({ file: hooksFile, message: `hook must use exec form (command "node" plus args), found command ${JSON.stringify(hook.command)}` });
+  }
   for (const arg of hookArgs(hooks)) {
     if (arg.startsWith(ROOT_VAR) && !existsSync(join(pluginDir, arg.slice(ROOT_VAR.length)))) {
       problems.push({ file: hooksFile, message: `hook script does not exist: ${arg}` });
@@ -72,10 +120,8 @@ export function checkManifests(root: string): ManifestProblem[] {
       checkPlugin(resolve(root, source), entry.name, problems);
     }
   }
-  for (const rel of ['package.json', 'plugins/h7/package.json']) {
-    const file = join(root, rel);
-    if (existsSync(file)) readJson(file, problems);
-  }
+  const rootPackage = join(root, 'package.json');
+  if (existsSync(rootPackage)) readJson(rootPackage, problems);
   return problems;
 }
 

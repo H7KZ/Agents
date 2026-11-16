@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict';
 import { join } from 'node:path';
 import { describe, it } from 'node:test';
-import { checkManifests, main } from '../check-manifests.ts';
+import { checkManifests, main, nonNodeImports } from '../check-manifests.ts';
 import { SLOW, cleanupTmp, runNode, tmpDir, writeTree } from './helpers.ts';
 
 cleanupTmp();
@@ -76,6 +76,45 @@ describe('checkManifests', () => {
     ]);
     assert.deepEqual(problems(repo({ ...base, 'plugins/h7/hooks/hooks.json': '[' })), ['invalid JSON']);
     assert.deepEqual(problems(repo({ ...base, 'package.json': '[' })), ['invalid JSON']);
+  });
+});
+
+describe('checkManifests: enforced rules', () => {
+  it('rejects dependencies of any kind in the plugin package.json and reports its invalid JSON once', () => {
+    for (const key of ['dependencies', 'devDependencies', 'peerDependencies', 'optionalDependencies']) {
+      const out = problems(repo({ ...base, 'plugins/h7/package.json': JSON.stringify({ type: 'module', [key]: { x: '1' } }) }));
+      assert.deepEqual(out, [`plugin package.json must not declare ${key} (zero runtime dependencies)`]);
+    }
+    assert.deepEqual(problems(repo({ ...base, 'plugins/h7/package.json': '[' })), ['invalid JSON']);
+  });
+
+  it('rejects non node: bare imports in plugin scripts in every import form, allows node: and relative', () => {
+    const src = [
+      "import a from 'node:fs';",
+      "import { b } from './b.ts';",
+      "import c from '../c.ts';",
+      "import d from 'left-pad';",
+      "export { e } from \"lodash\";",
+      "import 'side-effect';",
+      "const f = await import('chalk');",
+      "const g = require('minimist');",
+      "import type { T } from 'fs';",
+    ].join('\n');
+    const dir = repo({ ...base, 'plugins/h7/scripts/deep/x.ts': src, 'plugins/h7/scripts/readme.md': "import x from 'bad'" });
+    assert.deepEqual(problems(dir), ['left-pad', 'lodash', 'side-effect', 'chalk', 'minimist', 'fs'].map((s) => `runtime imports must start with node: or be relative, found "${s}"`));
+    assert.deepEqual(nonNodeImports("import a from 'node:fs'; import b from './x.ts'; import c from '/abs.ts'"), []);
+  });
+
+  it('rejects string-form and non-node hook commands', () => {
+    const hook = (command: unknown, args?: unknown) => JSON.stringify({ hooks: { PreToolUse: [{ hooks: [{ type: 'command', command, ...(args === undefined ? {} : { args }) }] }] } });
+    const bad = (file: string) => problems(repo({ ...base, 'plugins/h7/hooks/hooks.json': file }));
+    const expected = (command: string) => [`hook must use exec form (command "node" plus args), found command ${command}`];
+    assert.deepEqual(bad(hook('node ${CLAUDE_PLUGIN_ROOT}/scripts/guard.ts')), expected('"node ${CLAUDE_PLUGIN_ROOT}/scripts/guard.ts"'));
+    assert.deepEqual(bad(hook('node')), expected('"node"'));
+    assert.deepEqual(bad(hook('sh', ['x'])), expected('"sh"'));
+    assert.deepEqual(bad(hook('node', ['a', 3])), expected('"node"'));
+    assert.deepEqual(bad(hook('node', 'x')), expected('"node"'));
+    assert.deepEqual(bad(JSON.stringify({ hooks: { A: [{ type: 'command' }] } })), expected('undefined'));
   });
 });
 
