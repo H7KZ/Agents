@@ -74,6 +74,9 @@ scripts/                          repo tooling: lint-skills.ts, check-manifests.
 | A review finding survives only with a reproducing command and its output (unproven dropped, duplicates merged, ranked); the parent keeps only reproduced ids | `test/plugin/review-findings.test.ts`, `review-skill.test.ts` |
 | Lens picker covers every lens exactly once, selected or skipped with a reason | `test/plugin/review-lenses.test.ts` |
 | Reviewer model resolved from `~/.h7/models.json` (`H7_HOME` override), safe on missing or corrupt file, read only, never equal to the author model; codex/gemini detected on PATH without running | `test/plugin/models.test.ts` |
+| CI verdict from checks, review threads and mergeability: READY only with nothing failing, pending, conflicting or unresolved; one rerun per failure per head, stale base and real failure separated; never recommends merging | `test/plugin/ci-verdict.test.ts` (property tests) |
+| `ci-watch.ts` shells out to `gh` only through an injected runner, absolute PATH entries only, no shell; missing or unauthenticated gh, bad output and unreadable threads give BLOCKED, never a guess; rerun recorded before it is requested | `test/plugin/ci-watch.test.ts` |
+| `/h7:ship` registers the Stop gate in its own frontmatter, has all PR body sections, never pushes or merges unasked | `scripts/lint-skills.ts`, `test/plugin/ship-skill.test.ts` |
 | Skills never auto-trigger | `scripts/lint-skills.ts` |
 | AGENTS.md at most 150 lines | none yet |
 | Conventional Commits | none yet |

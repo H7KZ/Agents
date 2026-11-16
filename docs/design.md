@@ -24,6 +24,8 @@ Every phase is also its own command: `/h7:setup`, `/h7:verify`, `/h7:review`, `/
 
 `/h7:review` helpers (`plugins/h7/scripts/`): `review-lenses.ts` (verify-scope JSON in, `selected[]` and `skipped[]` out, every lens with a reason; `--all` forces all), `models.ts` (`reviewer --author <model>` resolves the reviewer model from `~/.h7/models.json`, `H7_HOME` override, missing or corrupt file means unconfigured, never writes; `cli` lists `codex` and `gemini` on PATH, detection only), `review-findings.ts` (`merge` parses reviewer reports, drops findings without command or output, dedupes by command or by place and title, ranks by severity then agreeing lenses; `keep` selects the ids the parent reproduced). Reviewers are the read-only agents `plugins/h7/agents/review-<lens>.md` (tools `Read, Grep, Glob, Bash`, enforced by the skill linter). Per-run files in `.h7/review/`.
 
+`/h7:ship` helpers (`plugins/h7/scripts/`): `ci-verdict.ts` (pure: parses `gh pr view` and review-thread JSON, `triage` splits failures into rerun, real and stale-base, `decide` returns READY, WAITING or BLOCKED with blocker kinds merge-conflicts, review-threads, failing-checks, stale-base, merge-gate, status-query, draft, not-open), `ci-watch.ts` (CLI over `gh` through an injected runner; one rerun of failed jobs per check per head commit recorded in `.h7/ci-watch.json`, failing log excerpt for real failures, rebase advice for stale bases, BLOCKED when gh is missing or unauthenticated; exit 0 READY, 1 WAITING, 2 BLOCKED; never merges, rebases or pushes). Ported in design from pstack watch-pr. The skill reads ship mode and auto-merge from the Ship section of `docs/agents/verification.md` and registers the verify Stop gate in its frontmatter.
+
 ## Decisions
 
 | # | Area | Decision |
