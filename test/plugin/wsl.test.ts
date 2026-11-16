@@ -9,7 +9,7 @@ import { pickDecision, scan } from '../../plugins/h7/scripts/scan.ts';
 import { newState, type Ctx } from '../../plugins/h7/scripts/types.ts';
 import { MARKER, MAX_SCRATCH_ENTRIES, realFsIo, scratchDirs, sha256, trustFile, withScratch, type FsIo } from '../../plugins/h7/scripts/workspace.ts';
 import { cleanupTmp, runs, tmpDir } from '../../scripts/test/helpers.ts';
-import { decide, fakeDisk, fakeGit, ruleOf } from './support.ts';
+import { decide, fakeDisk, fakeGit, makeCtx, ruleOf } from './support.ts';
 
 cleanupTmp();
 
@@ -71,12 +71,12 @@ describe('guard: wsl.exe --exec bash -lc is parsed like bash -c', () => {
   });
 
   it('makes relative paths unresolved after --cd', () => {
-    assert.equal(ruleOf(wsl('rm -rf build')), null);
+    assert.equal(ruleOf(wsl('rm -rf build')), 'ask:unresolved-cwd');
     assert.equal(ruleOf(wsl('rm -rf build', '--cd /srv --exec')), 'ask:unresolved-cwd');
   });
 
   it('an unresolvable variable in the inner command stays unresolved', () => {
-    assert.equal(ruleOf('wsl.exe --exec rm -rf \'$X\''), 'ask:recursive-delete-unresolved');
+    assert.ok(ruleOf('wsl.exe --exec rm -rf \'$X\'')?.startsWith('ask:'));
   });
 
   it('works from PowerShell too', () => {
@@ -90,7 +90,9 @@ describe('guard: wsl.exe --exec bash -lc is parsed like bash -c', () => {
     fc.assert(
       fc.property(inner, flags, fc.boolean(), (script, lead, dirty) => {
         const options = { dirty, branch: 'main', defaultBranch: 'main' };
-        assert.ok(rank(ruleOf(wsl(script, lead), options)) >= rank(ruleOf(`bash -c ${q(script)}`, options)), `${lead} ${script}`);
+        const plain = rank(ruleOf(`bash -c ${q(script)}`, options));
+        // Inside WSL the host home and working directory mean nothing, so some blocks soften to asks; nothing the plain parse refuses is ever allowed.
+        assert.ok(rank(ruleOf(wsl(script, lead), options)) >= Math.min(plain, 1), `${lead} ${script}`);
       }),
       { numRuns: runs(150) },
     );
@@ -105,7 +107,7 @@ describe('guard: wsl.exe --exec bash -lc is parsed like bash -c', () => {
         const joined = words.join(' ');
         const verdict = rank(ruleOf(`wsl.exe ${lead}-- ${joined}`, options));
         assert.ok(verdict >= 1, joined);
-        assert.ok(verdict >= rank(ruleOf(joined, options)), joined);
+        assert.ok(verdict >= Math.min(rank(ruleOf(joined, options)), 1), joined);
       }),
       { numRuns: runs(200) },
     );
@@ -139,6 +141,32 @@ function trustedIo(ws: string, home: string, over: Partial<FsIo> = {}, text?: st
     ...over,
   };
 }
+
+describe('wsl inner scripts never carry a host directory', () => {
+  it('property: no decision from a wsl inner script has a dir, so no snapshot is ever taken for it', () => {
+    const inner = fc.constantFrom('git reset --hard', 'git checkout -- .', 'git clean -fd', 'git restore .', 'cd /x && git reset --hard', 'git -C /y reset --hard', 'rm -rf /', 'ls');
+    const lead = fc.constantFrom('--exec bash -lc', '-e bash -c', '-d Ubuntu --exec sh -c', '--cd /x --exec bash -lc');
+    fc.assert(
+      fc.property(inner, lead, fc.boolean(), (script, flags, dirty) => {
+        const ctx = makeCtx({ dirty, root: '/repo', branch: 'main', defaultBranch: 'main' });
+        const found = scan(`wsl.exe ${flags} ${q(script)}`, 'sh', ctx, newState(ctx.cwd));
+        for (const decision of found) assert.equal(decision.dir, undefined, `${flags} ${script}`);
+      }),
+      { numRuns: runs(120) },
+    );
+    // control: the same script run directly on a dirty host tree does carry the directory
+    const direct = makeCtx({ dirty: true, root: '/repo' });
+    assert.ok(scan('git reset --hard', 'sh', direct, newState('/repo')).some((d) => d.dir !== undefined));
+  });
+
+  it('host clean-tree knowledge and the host home do not leak into the inner script', () => {
+    const ctx = makeCtx({ dirty: true, root: '/repo' });
+    const state = { ...newState('/repo'), trackedClean: true, untrackedClean: true };
+    const found = scan(`wsl.exe --exec bash -lc ${q('git reset --hard')}`, 'sh', ctx, state);
+    assert.ok(found.some((d) => d.decision === 'block' && d.rule === 'destructive-git-dirty'));
+    assert.equal(ctx.taint.home, true);
+  });
+});
 
 describe('workspace scratch directory', () => {
   const real = process.platform === 'win32' ? 'win32' : 'posix';

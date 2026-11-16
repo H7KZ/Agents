@@ -27,7 +27,7 @@ The Stop gate in the frontmatter blocks stopping while `.h7/verify.json` has a `
 
 ## Workspace mode
 
-Run `node "${CLAUDE_PLUGIN_ROOT}/scripts/workspace.ts" show` first. `mode: "workspace"` (a `.h7-workspace.json` above the repo lists it) changes four things: every `.h7/` path below means the printed `stateDir` (outside the repo; skip the exclude step); ship settings come from the printed `ship`, `autoMerge`, `base` and the `verification` file, not from `origin/<default>` (the workspace file is not part of the change, so the "a change cannot edit its own settings" safeguard holds); the PR body follows `prTemplate` (step 5); and `Auto-merge: on` or `push` count only when `trusted` is true, otherwise tell the user to read the marker and run `node "${CLAUDE_PLUGIN_ROOT}/scripts/workspace.ts" trust` in a terminal and use `pr` with auto-merge off meanwhile. Without a marker nothing changes.
+Run `node "${CLAUDE_PLUGIN_ROOT}/scripts/workspace.ts" show` first. `mode: "workspace"` (a `.h7-workspace.json` above the repo lists it) changes four things: every `.h7/` path below means the printed `stateDir` (outside the repo; skip the exclude step); ship settings come from the printed `ship`, `autoMerge`, `base` and the `verification` file, not from `origin/<default>` (the workspace file is not part of the change, so the "a change cannot edit its own settings" safeguard holds); the PR body follows `prTemplate` (step 5); and `Auto-merge: on` or `push` count only when `trusted` is true, otherwise tell the user to read the marker and run `node "${CLAUDE_PLUGIN_ROOT}/scripts/workspace.ts" trust` in your own terminal (the user, never the agent; the guard blocks it) and use `pr` with auto-merge off meanwhile. Without a marker nothing changes.
 
 ## 1. Preflight
 

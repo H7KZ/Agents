@@ -30,7 +30,7 @@ Run `node "${CLAUDE_PLUGIN_ROOT}/scripts/workspace.ts" show`. If `mode` is `work
 - Repo memory names: the glossary is `memory.glossary` from `show` (`CONTEXT.md`, or `GLOSSARY.md` when that is the one that exists).
 - Report "workspace mode, nothing written inside the repo" and verify it: `git status --short --ignored` in the repo shows no h7 file.
 
-A malformed marker is an error: stop and show it. The marker's `ship` and `autoMerge` are the answers to the ship questions; do not ask again, and say when they are ignored because the marker is not yet trusted (the user runs `node "${CLAUDE_PLUGIN_ROOT}/scripts/workspace.ts" trust` in a terminal).
+A malformed marker is an error: stop and show it. The marker's `ship` and `autoMerge` are the answers to the ship questions; do not ask again, and say when they are ignored because the marker is not yet trusted (the user runs `node "${CLAUDE_PLUGIN_ROOT}/scripts/workspace.ts" trust` in your own terminal (the user, never the agent; the guard blocks it)).
 
 ## 1. Prepare
 

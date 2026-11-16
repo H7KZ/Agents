@@ -19,7 +19,7 @@ Run inside the target repo, on a feature branch. Scope = what the change touches
 
 ## Workspace mode
 
-Run `node "${CLAUDE_PLUGIN_ROOT}/scripts/workspace.ts" show` once. `mode: "workspace"` means a `.h7-workspace.json` above this repo lists it: every `.h7/` path in this skill then means the printed `stateDir` (absolute, outside the repo; the scripts find it themselves, `mkdir -p` it before redirecting into it), the recipe is the file printed as `verification` (not `docs/agents/verification.md`), the default `--base` is the printed `base`, and nothing is created inside the repo. A malformed marker is an error: stop and show it. `mode: "repo"`: nothing changes. `trust` other than `trusted`: tell the user to read the marker and run `node "${CLAUDE_PLUGIN_ROOT}/scripts/workspace.ts" trust` in a terminal; until then scratch, push and auto-merge from it are ignored.
+Run `node "${CLAUDE_PLUGIN_ROOT}/scripts/workspace.ts" show` once. `mode: "workspace"` means a `.h7-workspace.json` above this repo lists it: every `.h7/` path in this skill then means the printed `stateDir` (absolute, outside the repo; the scripts find it themselves, `mkdir -p` it before redirecting into it), the recipe is the file printed as `verification` (not `docs/agents/verification.md`), the default `--base` is the printed `base`, and nothing is created inside the repo. A malformed marker is an error: stop and show it. `mode: "repo"`: nothing changes. `trust` other than `trusted`: tell the user to read the marker and run `node "${CLAUDE_PLUGIN_ROOT}/scripts/workspace.ts" trust` in your own terminal (the user, never the agent; the guard blocks it); until then scratch, push and auto-merge from it are ignored.
 
 ## 1. Scope and state
 

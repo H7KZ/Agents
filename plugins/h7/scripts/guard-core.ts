@@ -5,6 +5,7 @@ import { createGit, snapshotRunner, spawnRunner, type Runner } from './git.ts';
 import { realDisk, type Disk } from './gitfiles.ts';
 import { appendDisabledOnce, appendLog, type LogEntry } from './log.ts';
 import { makePaths, type Realpath } from './paths.ts';
+import { isReadOnly } from './readonly-command.ts';
 import { withScratch } from './workspace.ts';
 import { pickDecision, scan } from './scan.ts';
 import { takeSnapshot } from './snapshot.ts';
@@ -111,11 +112,15 @@ const CONFIG_MENTION = /guard["']*\.["']*json|[^\s"'=:.\\/][\\/]+["']*\.h7(?![\w
 const CONFIG_NAME = /guard\.json|^[\\/]{2}|^.{2,}:/i;
 const RUNS_PATH = /[\\/]\.h7[\\/]runs(?:[\\/]|$)/i;
 const RUNS_MENTION = /\.h7[\\/]+["']?runs(?![\w.-])/i;
-// Anything that can change a file; a mere read (ls, cat, Get-Content) of the journal stays allowed.
-const WRITE_WORDS = />|\b(?:tee|rm|rmdir|mv|cp|ln|sed|awk|perl|python3?|node|truncate|dd|install|del|erase|ren|rename|touch|chmod|set-content|add-content|out-file|clear-content|remove-item|move-item|copy-item|new-item|rename-item|sc|ac|ri|mi|ci|ni)\b/i;
 // The workspace marker is guard policy too (its scratch list widens what deletes may touch): any spelling of its name, quoted, globbed or as an
 // 8.3 short name. Shell commands are refused only together with a write-ish word or redirect, so reading it stays possible.
 const MARKER_NAME = /h7["']*-["']*(?:w["']*o["']*r["']*k|[*?[])|h7-wor~\d/i;
+// Trusting a marker is the person's decision: any command naming workspace.ts together with trust is refused, whatever the quoting. An extra layer, not the boundary (see SECURITY.md).
+const TRUST_REASON = 'Trusting a workspace marker must be done by you, in your own terminal: ask the user to run the workspace.ts trust command themselves.';
+const TRUST_COMMAND = (text: string): boolean => {
+  const plain = text.replace(/["'`\\^]/g, '').toLowerCase();
+  return /workspace\s*\.\s*ts/.test(plain) && /\btrust\b/.test(plain);
+};
 const MARKER_REASON =
   'The h7 workspace marker (.h7-workspace.json) is guard policy: its scratch list widens what deletes may touch and it sets ship defaults. Agents must not change it. Ask the user to edit it.';
 const CONFIG_REASON =
@@ -218,11 +223,17 @@ export function run(stdinText: string, env: Record<string, string | undefined>, 
       return configBlock(logError === null ? '' : ` (could not write guard log: ${logError})`);
     }
     cwd = typeof input.cwd === 'string' && input.cwd !== '' ? input.cwd : io.fallbackCwd;
-    if (MARKER_NAME.test(text) && WRITE_WORDS.test(text)) {
+    const dialect = input.tool_name === 'PowerShell' ? 'ps' : 'sh';
+    if (TRUST_COMMAND(text)) {
+      const logError = appendLog(home, entry('block', 'workspace-trust', text, cwd));
+      return { code: 2, stdout: '', stderr: `h7 guard blocked [workspace-trust]: ${TRUST_REASON}${logError === null ? '' : ` (could not write guard log: ${logError})`}
+` };
+    }
+    if (MARKER_NAME.test(text) && !isReadOnly(text, dialect)) {
       const logError = appendLog(home, entry('block', 'workspace-marker', text, cwd));
       return markerBlock(logError === null ? '' : ` (could not write guard log: ${logError})`);
     }
-    if (RUNS_MENTION.test(text) && WRITE_WORDS.test(text) && unattended()) return journalBlock(appendLog(home, entry('block', 'unattended-journal', text, cwd)));
+    if (RUNS_MENTION.test(text) && !isReadOnly(text, dialect) && unattended()) return journalBlock(appendLog(home, entry('block', 'unattended-journal', text, cwd)));
     const platform = io.platform === 'win32' ? 'win32' : 'posix';
     const paths = makePaths(platform, io.realpath);
     const disk = io.disk ?? realDisk;

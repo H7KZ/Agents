@@ -18,6 +18,8 @@ Things h7 does on purpose:
 - Sends nothing anywhere: no telemetry, no network calls from the plugin scripts. The CI watcher only runs your local
   `gh` against the PR you point it at.
 
+Trusting a workspace marker (`workspace.ts trust`) is the one step an agent must never do for you. A TTY check is **not** a security boundary against an agent running as you: a pty wrapper (script, unbuffer, expect) can fake a terminal. The layers are: the confirmation code is printed and read only on the controlling terminal device itself (`/dev/tty`, or `CONIN$`/`CONOUT$` on Windows), never on stdout, stderr or stdin, so output an agent sees never contains it and piped or scripted stdio cannot answer; the guard blocks any command that names `workspace.ts` together with `trust`, and any write to the marker or the trust file; and the marker hash is only honoured while the exact bytes are unchanged. A same-user agent that controls a pty and bypasses the guard (for example with `H7_GUARD=off`) can still defeat this; run `trust` yourself, in your own terminal, and review what it shows.
+
 Known limits: reviewer subagents have a Bash tool restricted by prompt only; the guard's shell parsing is best effort
 (ambiguity asks or blocks); `H7_GUARD=off` and the ask-mode config are deliberate escape hatches.
 

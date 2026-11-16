@@ -132,7 +132,13 @@ export function scan(command: string, dialect: Dialect, ctx: Ctx, state: ScanSta
     if (inner) found.push(...scanNested(inner.script, inner.dialect));
     const wsl = wslCall(simple);
     if (wsl?.ask !== undefined) found.push(ask('wsl-exec', wsl.ask));
-    if (wsl?.script !== undefined) found.push(...scan(wsl.script, 'sh', ctx, wsl.cwd === true ? { ...cloneState(state), cwdUnknown: true } : cloneState(state), depth + 1));
+    if (wsl?.script !== undefined) {
+      // The inner script acts in the Linux filesystem, not on the host: its working directory is unknown, the host's clean-tree knowledge does not
+      // apply, and no decision may carry a host directory (so a dirty-tree snapshot is never taken for it and the block stays).
+      ctx.taint.home = true;
+      const inside: ScanState = { ...cloneState(state), cwdUnknown: true, trackedClean: undefined, untrackedClean: undefined };
+      for (const decision of scan(wsl.script, 'sh', ctx, inside, depth + 1)) found.push({ decision: decision.decision, rule: decision.rule, reason: decision.reason });
+    }
     // Only `cd x || exit` at the top level proves the later commands run in the new directory.
     if (LEAVERS.has(simple.name) && level === 0 && op === '||' && afterCd) state.alt = [];
     if (DIRECTORY_CHANGERS.has(simple.name)) {

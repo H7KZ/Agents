@@ -38,6 +38,52 @@ const blocked = (r: { code: number; stderr: string }, label: string): void => {
   assert.match(r.stderr, /^h7 guard blocked \[workspace-marker\]: .*Ask the user to edit it\.\n$/, label);
 };
 
+describe('the trust command is for the person to run', () => {
+  it('blocks any command naming workspace.ts together with trust, however it is quoted or spaced', () => {
+    for (const command of [
+      'node workspace.ts trust',
+      'node "${CLAUDE_PLUGIN_ROOT}/scripts/workspace.ts" trust',
+      'node scripts/WORKSPACE.TS TRUST',
+      "node scripts/work'space'.ts 'tr'ust",
+      'node scripts/workspace.ts   "t"r"u"st /x',
+      'node scripts/workspace.ts tr\\ust',
+      'cd x && node ./workspace.ts trust',
+      'echo yes | node workspace.ts trust',
+      'node workspace.ts trust',
+    ]) {
+      const r = shell(command);
+      assert.equal(r.code, 2, command);
+      assert.match(r.stderr, /^h7 guard blocked \[workspace-trust\]: .*your own terminal/, command);
+    }
+    const ps = shell('node .\scripts\workspace.ts trust', 'PowerShell');
+    assert.match(ps.stderr, /workspace-trust/);
+  });
+
+  it('leaves other uses of workspace.ts, and the word trust elsewhere, alone', () => {
+    for (const command of ['node workspace.ts show', 'node workspace.ts status', 'echo trust', 'git log --grep trust']) {
+      const r = shell(command);
+      assert.deepEqual([r.code, r.stderr], [0, ''], command);
+    }
+  });
+});
+
+describe('a mention of the marker or the journal is refused unless every command only reads', () => {
+  const NAME = ['.h7', 'workspace.json'].join('-');
+  it('blocks every spelling of a write the old denylist could miss', () => {
+    for (const command of [`python3 -c "open('${NAME}','w')"`, `dd of=${NAME}`, `ruby -e 1 ${NAME}`, `curl -o ${NAME} x`, `git checkout -- ${NAME}`, `cat x | cat > ${NAME}`, `awk 1 ${NAME} > o`, `xargs rm < ${NAME}`, `ls $(rm ${NAME})`, `cat $X ${NAME}`]) {
+      blocked(shell(command), command);
+    }
+    blocked(shell(`Move-Item ${NAME} x`, 'PowerShell'), 'ps');
+  });
+
+  it('lets readers through', () => {
+    for (const command of [`cat ${NAME}`, `grep scratch ${NAME} | head`, `git diff -- ${NAME}`, `ls -la ${NAME}`]) {
+      const r = shell(command);
+      assert.deepEqual([r.code, r.stderr], [0, ''], command);
+    }
+  });
+});
+
 describe('the trust file stays protected', () => {
   it('blocks file tools and shell writes that name the trust file under the h7 home', () => {
     const home = tmpDir('h7-trust-guard-');
