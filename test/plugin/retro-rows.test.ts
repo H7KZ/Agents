@@ -341,3 +341,42 @@ describe('main', () => {
     assert.equal(runNode(script, ['nope'], { cwd: root }).status, 2);
   });
 });
+
+describe('review fixes', () => {
+  it('apply --file only edits existing markdown files outside .git', () => {
+    const root = repo({ 'package.json': '{}\n', '.git/hooks/pre-commit': '#!/bin/sh\n', 'docs/Notes.MD': TABLE, 'docs/x.txt': TABLE, '.GIT/x.md': TABLE });
+    run(root, ['propose', JSON.stringify([candidate('a')])]);
+    for (const file of ['package.json', '.git/hooks/pre-commit', 'docs/x.txt', '.GIT/x.md', '.git/info/exclude.md']) {
+      const result = run(root, ['apply', 'r1', '--file', file, '--create', '--write']);
+      assert.equal(result.code, 2, file);
+      assert.match(result.err, /only markdown files/, file);
+    }
+    assert.equal(readFileSync(join(root, 'package.json'), 'utf8'), '{}\n');
+    assert.equal(readFileSync(join(root, '.git/hooks/pre-commit'), 'utf8'), '#!/bin/sh\n');
+    assert.equal(run(root, ['apply', 'r1', '--file', 'docs/Notes.MD', '--write']).code, 0);
+    assert.match(readFileSync(join(root, 'docs/Notes.MD'), 'utf8'), /\| a \|/);
+  });
+
+  it('the 150-line cap applies whatever the case of the file name', () => {
+    const big = `${'l\n'.repeat(148)}${TABLE}`;
+    const root = repo({ 'agents.md': big, 'Claude.MD': big });
+    run(root, ['propose', JSON.stringify([candidate('a')])]);
+    for (const file of ['agents.md', 'Claude.MD']) assert.equal(run(root, ['apply', 'r1', '--file', file, '--write']).code, 1, file);
+  });
+
+  it('row ids have at most 6 digits and are unique', () => {
+    const base = row('r1', 'a');
+    assert.throws(() => parseStore(serializeStore([{ ...base, id: 'r1234567' }])), /malformed row/);
+    assert.equal(parseStore(serializeStore([{ ...base, id: 'r123456' }])).length, 1);
+    assert.throws(() => parseStore(serializeStore([base, { ...row('r1', 'b') }])), /malformed row/);
+  });
+
+  it('cells neutralise comment openers and dedupe agrees with escaping', () => {
+    assert.ok(!cell('x <!-- h7:end --> y', 'x').includes('<!--'));
+    const tricky = [row('r1', 'a\\|b'), row('r2', 'c | d'), row('r3', 'e\\')];
+    const once = insertRows(TABLE, tricky, false, null);
+    assert.deepEqual(once.added, ['r1', 'r2', 'r3']);
+    const twice = insertRows(once.text, tricky, false, null);
+    assert.deepEqual([twice.status, twice.exists], ['unchanged', ['r1', 'r2', 'r3']]);
+  });
+});

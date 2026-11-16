@@ -1,5 +1,5 @@
 import { lstatSync, readdirSync, readFileSync, type Stats } from 'node:fs';
-import { basename, join, resolve } from 'node:path';
+import { basename, join, relative, resolve } from 'node:path';
 import { findRoot } from './run-journal.ts';
 import { isRunId, parseJournal, redactText, roundScores } from './run-journal-core.ts';
 import { ensureExclude, MAX_LINES, pathProblem, writeAtomic } from './setup-files.ts';
@@ -32,7 +32,7 @@ const lineCount = (text: string): number => text.replace(/\r?\n$/, '').split(/\r
 /** One redacted, single-line, bounded cell. */
 export function cell(value: unknown, name: string): string {
   if (typeof value !== 'string') throw new Failure(`${name} must be a string`);
-  const clean = redactText(value).replace(/\s+/g, ' ').trim();
+  const clean = redactText(value).replace(/<!--/g, '&lt;!--').replace(/\s+/g, ' ').trim();
   if (clean === '') throw new Failure(`${name} must not be empty`);
   if (clean.length > MAX_CELL) throw new Failure(`${name} is longer than ${MAX_CELL} characters`);
   return clean;
@@ -62,7 +62,7 @@ export function parseCandidates(raw: unknown): Candidate[] {
   });
 }
 
-const key = (rule: string): string => rule.replace(/\\\|/g, '|').replace(/\s+/g, ' ').trim().toLowerCase();
+const key = (rule: string): string => rule.replace(/\s+/g, ' ').trim().toLowerCase();
 
 /** Parses the store; throws on anything that is not a list of well-formed rows. */
 export function parseStore(text: string | null): Row[] {
@@ -76,9 +76,11 @@ export function parseStore(text: string | null): Row[] {
   const rows = typeof raw === 'object' && raw !== null ? (raw as { rows?: unknown }).rows : undefined;
   if (!Array.isArray(rows)) throw new Failure(`${STORE} has no rows list`);
   const status: string[] = ['pending', 'rejected', 'applied'];
+  const seen = new Set<string>();
   return rows.map((row) => {
     const r = (typeof row === 'object' && row !== null ? row : {}) as Record<string, unknown>;
-    if (typeof r.id !== 'string' || !/^r\d+$/.test(r.id) || typeof r.status !== 'string' || !status.includes(r.status)) throw new Failure(`${STORE} has a malformed row`);
+    if (typeof r.id !== 'string' || !/^r\d{1,6}$/.test(r.id) || seen.has(r.id) || typeof r.status !== 'string' || !status.includes(r.status)) throw new Failure(`${STORE} has a malformed row`);
+    seen.add(r.id);
     return { ...parseCandidates([r])[0], id: r.id, status: r.status as Status } as Row;
   });
 }
@@ -112,8 +114,18 @@ export function addRows(rows: Row[], candidates: Candidate[]): Proposed {
   return { rows: next, added, duplicates };
 }
 
-const escapeCell = (text: string): string => text.replace(/\|/g, '\\|');
-const firstCell = (line: string): string => key(line.replace(/^\s*\|\s*/, '').split(/(?<!\\)\|/)[0] as string);
+const escapeCell = (text: string): string => text.replace(/[\\|]/g, (c) => `\\${c}`);
+
+/** First cell of a table row with `\\` and `\|` escapes undone, normalised like `key`. */
+function firstCell(line: string): string {
+  const text = line.replace(/^\s*\|/, '');
+  let cell = '';
+  for (let i = 0; i < text.length && text[i] !== '|'; i += 1) {
+    if (text[i] === '\\' && (text[i + 1] === '\\' || text[i + 1] === '|')) i += 1;
+    cell += text[i];
+  }
+  return key(cell);
+}
 
 export interface Insert {
   status: 'updated' | 'unchanged' | 'no-table' | 'oversize';
@@ -248,6 +260,12 @@ function save(root: string, rows: Row[]): void {
   writeAtomic(file, serializeStore(rows), root);
 }
 
+/** A `.md` file (any case) whose path inside the repo has no `.git` segment. */
+export function isMarkdownOutsideGit(root: string, target: string): boolean {
+  const parts = relative(root, target).split(/[\\/]/);
+  return /\.md$/i.test(target) && !parts.some((part) => part.toLowerCase() === '.git');
+}
+
 function pick(rows: Row[], ids: string[]): Row[] {
   if (ids.length === 0) throw new Failure(`name at least one row id\n${USAGE}`);
   return [...new Set(ids)].map((id) => {
@@ -306,9 +324,10 @@ export function main(argv: string[], env: Env): number {
       const problem = pathProblem(file, root);
       if (problem !== null) throw new Failure(problem);
       const target = resolve(root, file);
+      if (!isMarkdownOutsideGit(root, target)) throw new Failure(`only markdown files outside .git can be edited: ${file}`);
       const existing = readIfPlain(target);
       if (existing === null) throw new Failure(`cannot read ${file}`);
-      const limit = ['AGENTS.md', 'CLAUDE.md'].includes(basename(file)) ? MAX_LINES : null;
+      const limit = ['agents.md', 'claude.md'].includes(basename(file).toLowerCase()) ? MAX_LINES : null;
       const todo = chosen.filter((row) => row.status === 'pending');
       const result = insertRows(existing, todo, flags.includes('--create'), limit);
       const write = flags.includes('--write') && (result.status === 'updated' || result.status === 'unchanged');
