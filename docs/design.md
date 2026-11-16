@@ -53,7 +53,7 @@ Every phase is also its own command: `/h7:setup`, `/h7:verify`, `/h7:review`, `/
 | 12 | Ship | Ship mode per repo (`pr` / `push`), overridable per run. Repo's commit convention, else Conventional Commits. PR body: Why / What changed / Scope / Blast radius / Verification / Review / Decisions. CI watcher CLI (GitHub only for now, verdict model provider-agnostic): READY / WAITING / BLOCKED with blocker kinds; triage flake (1 rerun) vs stale base vs real failure. Never merges unless the repo opts in. |
 | 13 | Runtime | Hooks and CLIs in TypeScript run by Node ≥22.18 type stripping, zero dependencies, tests on `node:test`. This repo CI runs ubuntu (Node 22.18 and 24) and windows (24) only, to save runner minutes. |
 | 14 | Learning loop | `/h7:retro`: proposes checks for the target repo (architecture → types → lint → test → prose), each proven against a real past mistake, user approves row by row, separate commits. h7 improvements queue in `~/.h7/proposals/`; `/h7:improve` in this repo drafts them, user approves. |
-| 15 | Build order | foundation → setup → verify → review → ship → driver → learning. First real target: PortfolioV7. |
+| 15 | Build order | foundation → setup → verify → review → ship → driver → learning. First real target: a real web project. |
 
 ## Repo layout
 

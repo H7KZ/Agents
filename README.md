@@ -1,5 +1,7 @@
 # Agents
 
+[![ci](https://github.com/H7KZ/Agents/actions/workflows/ci.yml/badge.svg)](https://github.com/H7KZ/Agents/actions/workflows/ci.yml) [![license: MIT](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
+
 `h7` is a universal, cross-repo agent workflow for Claude Code, shipped as a plugin from the `h7kz` marketplace
 (this repo). It invests in the agent's environment (guards, checks, verification) instead of reading every diff.
 
@@ -72,6 +74,12 @@ A `PreToolUse` hook for Bash and PowerShell. It blocks force pushes to protected
 repo; it asks before protected pushes and deploy/publish commands. Near-misses are logged (secrets redacted) to
 `~/.h7/guard.log`. Internal errors ask instead of allowing. `H7_GUARD=off` disables it.
 
+**Prompts follow your session.** In a `bypassPermissions` session the guard does not add its own prompts: things it
+would only ask about run (and are still logged); hard blocks (force push to protected branches, hook skipping,
+secret commits, deletes outside the repo, destructive git on a dirty tree) always block. In every other mode it asks.
+Override per machine with `H7_GUARD_ASK=prompt|allow|deny` or `{"ask": "..."}` in `~/.h7/guard.json` (your explicit
+choice always wins over the session mode).
+
 It is a safety floor against agent accidents, not a sandbox: anything it cannot resolve statically asks
 (git failing or missing, piping into a shell, `xargs`, `iex`, variable command words or delete targets, git aliases,
 `find -delete` and `xargs rm` starts), and only clearly destructive, resolvable cases are blocked. State carries across a
@@ -79,8 +87,23 @@ chain (`git checkout main && git push -f`, `git stash -u && git reset --hard`, `
 tiered: `.env`, `id_rsa`, `*.key`, `*.p12` and similar block; `.env.development`, `*.pem`, `.npmrc`, `*.tfvars` ask
 (a `*.pem` holding a private key blocks). Deletes under the OS temp directory are allowed.
 
-## Development
+## Privacy and security
 
-See [AGENTS.md](AGENTS.md). `npm ci && npm run check`.
+No telemetry, no network calls from the plugin scripts. Logs, run journals and proposals stay on your machine
+(`~/.h7`, `.h7/` in the repo, git-excluded), with secrets redacted before writing. Repository content is treated
+as data, never as instructions. See [SECURITY.md](SECURITY.md) for the threat model, known limits and how to
+report a vulnerability.
+
+## Status and support
+
+Early but tested: 100% line/branch/function coverage, mutation score above 80, CI on Linux and Windows (Node 22.18
+and 24), macOS checked by hand. The plugin has no version number; the commit SHA is the version (`main` is the
+supported line). The LLM-driven skills are verified by lint, static tests and their helper scripts, so expect rough
+edges and please file issues. Windows, macOS, Linux and WSL are supported.
+
+## Contributing
+
+See [CONTRIBUTING.md](CONTRIBUTING.md) and [AGENTS.md](AGENTS.md). `npm ci && npm run check`. Please follow the
+[code of conduct](CODE_OF_CONDUCT.md).
 
 License: MIT. Attribution: [NOTICE](NOTICE).

@@ -24,7 +24,7 @@ Abbreviations for sources:
 - **[codex-hooks]** https://learn.chatgpt.com/docs/hooks.md (redirect target of developers.openai.com/codex/hooks)
 - **[cursor]** https://cursor.com/docs/skills
 - **[gemini]** https://geminicli.com/docs/cli/skills/
-- **[mp]** mattpocock/skills, read at two points in time: local copy v1.2.3 at `C:\Users\honzi\.claude\plugins\marketplaces\local-desktop-app-uploads\mattpocock-skills\` and upstream `main` @ `5863806` (2026-11-12, plugin.json v1.3.2) via `gh api repos/mattpocock/skills/...`
+- **[mp]** mattpocock/skills, read at two points in time: local copy v1.2.3 at `<home>/.claude\plugins\marketplaces\local-desktop-app-uploads\mattpocock-skills\` and upstream `main` @ `5863806` (2026-11-12, plugin.json v1.3.2) via `gh api repos/mattpocock/skills/...`
 
 ---
 
@@ -129,7 +129,7 @@ Abbreviations for sources:
 | Mechanism | What syncs | Update path | Hooks/agents? | Cross-tool | Windows notes |
 |---|---|---|---|---|---|
 | **Git marketplace + plugin** (`marketplace add H7KZ/Agents`) | skills, agents, hooks, MCP, output styles, bin | auto-update (once turned on) or `plugin update`. Commit-SHA versioning if `version` is omitted | yes. Plugin agents **ignore `hooks`, `mcpServers`, `permissionMode`** [agents] | Codex and Copilot CLIs reportedly install from the same `.claude-plugin/marketplace.json` (mp README: `codex plugin marketplace add mattpocock/skills`; mp has no `.codex-plugin/`). **Unverified against Codex docs.** Codex sets `CLAUDE_PLUGIN_ROOT` for hook compatibility [codex-hooks] | copied to cache. Symlink rules above |
-| **Local-directory marketplace** (on the authoring machine: `marketplace add C:/Users/honzi/Documents/GitHub/Agents`) | same | **in place**: edits are live after `/reload-plugins` | yes | – | no copy, so no symlink issues |
+| **Local-directory marketplace** (on the authoring machine: `marketplace add <home>/Documents/GitHub/Agents`) | same | **in place**: edits are live after `/reload-plugins` | yes | – | no copy, so no symlink issues |
 | **Plugin dir under `~/.claude/skills/<name>`** (`@skills-dir`) | whole plugin, in place | `git pull` | yes (no trust prompt for your own `~/.claude/skills`) | the skills subdirs are not auto-seen by other tools | needs a symlink or junction into the repo, or a clone there |
 | **Symlink each skill** into `~/.claude/skills` + `~/.agents/skills` (mp `scripts/link-skills.sh`) | skills only | `git pull` | no; hooks need a settings.json merge, agents need a `~/.claude/agents` link | yes: `~/.agents/skills` is read by Codex [codex-skills], Cursor [cursor], Gemini [gemini]. Cursor also reads `~/.claude/skills` | `ln -s` in Git Bash makes copies unless `MSYS=winsymlinks:nativestrict` and Developer Mode are set |
 | **skills.sh** (`npx skills add H7KZ/Agents`) | copies skills | `npx skills update` (manual) | no | yes (multi-agent installer) | already in use on this machine |
@@ -311,7 +311,7 @@ A config shape implied by the workflow (for the grilling session, not decided): 
 
 **A. H7KZ/Agents = marketplace + one "core" plugin, Agent-Skills-compliant, mattpocock as a dependency** *(recommended starting point)*
 - Layout: `.claude-plugin/marketplace.json` (`name: h7kz`) + `plugins/core/{.claude-plugin/plugin.json, skills/, agents/, hooks/hooks.json, scripts/*.mjs}`. Omit `version` so updates track commits.
-- Authoring machine: `claude plugin marketplace add C:/Users/honzi/Documents/GitHub/Agents` (in place, live edits). Other machines: `claude plugin marketplace add H7KZ/Agents` with `autoUpdate: true` in `~/.claude/settings.json` `extraKnownMarketplaces`.
+- Authoring machine: `claude plugin marketplace add <home>/Documents/GitHub/Agents` (in place, live edits). Other machines: `claude plugin marketplace add H7KZ/Agents` with `autoUpdate: true` in `~/.claude/settings.json` `extraKnownMarketplaces`.
 - Depend on `mattpocock-skills@claude-plugins-official` (cross-marketplace dependency, allowlisted), or simply document installing it. Don't vendor it. Remove the stale skills.sh symlinks and the desktop-upload copy.
 - Hooks as exec-form `node` scripts (cross-OS). The Stop gate is registered via the **`/ship` skill's frontmatter `hooks`** so it's only active while the workflow runs.
 - Other tools: the same `skills/` are spec-compliant (`name` = dir, plus `agents/openai.yaml`). Expose them via Codex/Copilot plugin install (if it reads `.claude-plugin`, unverified) or `npx skills add H7KZ/Agents`.

@@ -14,4 +14,4 @@
 - [0012](0012-ship-mode-per-repo.md): per-repo ship mode, no auto-merge
 - [0013](0013-runtime-typescript-node.md): TypeScript on Node type stripping
 - [0014](0014-learning-loop-retro.md): learning loop via retro and proposal queue
-- [0015](0015-build-order.md): build order, PortfolioV7 first
+- [0015](0015-build-order.md): build order, a real web project first

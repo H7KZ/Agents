@@ -3,3 +3,6 @@ coverage/
 .stryker-tmp/
 reports/
 *.h7bak
+.h7/
+HANDOFF.md
+.claude/settings.local.json

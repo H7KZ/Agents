@@ -10,7 +10,7 @@ pstack pinned at commit `bf0c7cd8` (2026-11-14), version 0.15.42. `P/` below = `
 
 ## 1. Lauren Tan, "All Code Is Slop (Except Mine)" [A]
 
-Source: transcript `C:\Users\honzi\Downloads\All Code Is Slop (Except Mine) — Lauren Tan, SpaceXSI.txt`; video https://www.youtube.com/watch?v=O_zcc6Xl12g (title confirmed; channel, date, description not retrievable via fetch).
+Source: transcript `<home>/Downloads\All Code Is Slop (Except Mine) — Lauren Tan, SpaceXSI.txt`; video https://www.youtube.com/watch?v=O_zcc6Xl12g (title confirmed; channel, date, description not retrievable via fetch).
 
 - Inverse pyramid of where to invest: (1) code/API design/architecture, (2) lint/types/compilers/tests, both deterministic; (3) runtime + formal verification; (4) prose (rules, skills, AGENTS.md) last, only for judgment.
 - Core rule: every agent correction becomes a deterministic check or an API/architecture change that eliminates the class, not another AGENTS.md line. "Do enough and there's nothing left to review."
