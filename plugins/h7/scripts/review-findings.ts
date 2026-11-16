@@ -176,35 +176,123 @@ export function summarize(files: string[], read: Read): Summary {
   return { findings: mergeFindings(reports), dropped: reports.flatMap((r) => r.dropped), errors };
 }
 
-const USAGE = 'usage: review-findings.ts merge <reviewer-output-file>... | keep <findings.json> <id>...';
+export interface Rerun {
+  /** auto: the parent may run it without asking. needs-approval: ask the user first, naming the command. */
+  status: 'auto' | 'needs-approval';
+  reason: string;
+}
 
-/** merge: parse reviewer outputs, drop the unproven, dedupe, rank. keep: the findings the parent reproduced (by id). */
+const auto = (reason: string): Rerun => ({ status: 'auto', reason });
+const needs = (reason: string): Rerun => ({ status: 'needs-approval', reason });
+
+const META = /[;&|<>`$\n\r\\(){}]/;
+const GIT_SUBS = new Set(['diff', 'show', 'log', 'grep', 'blame', 'ls-files', 'cat-file', 'rev-parse', 'status']);
+const GIT_BAD = /^(?:-c(?:=|$)|--output|--exec|--ext-diff|--textconv|--open-files-in-pager|--upload-pack|--receive-pack|--config|-O)/;
+const RG_BAD = /^(?:--pre|--hostname-bin|--search-zip|-[A-Za-z]*z)/;
+const squash = (command: string): string => command.trim().replace(/\s+/g, ' ');
+
+/** Words of a simple command line; quotes group, nothing expands. Null on an unbalanced quote. */
+function words(command: string): string[] | null {
+  const out: string[] = [];
+  let current = '';
+  let quote: string | null = null;
+  let open = false;
+  for (const ch of command) {
+    if (quote !== null) {
+      if (ch === quote) quote = null;
+      else current += ch;
+    } else if (ch === '"' || ch === "'") {
+      quote = ch;
+      open = true;
+    } else if (/\s/.test(ch)) {
+      if (open) out.push(current);
+      current = '';
+      open = false;
+    } else {
+      current += ch;
+      open = true;
+    }
+  }
+  if (quote !== null) return null;
+  if (open) out.push(current);
+  return out;
+}
+
+/** Absolute, drive, home-relative, or containing a ".." segment: a path that can leave the repo. */
+const leavesRepo = (value: string): boolean => /^(?:[A-Za-z]:|\/|~)/.test(value) || value.split('/').includes('..');
+
+/**
+ * Can the parent rerun a reviewer-supplied command without asking? Only a single simple read-only command qualifies:
+ * a git read subcommand, grep or rg over repo-relative paths, or the exact test command recorded for the repo.
+ * Everything else, including anything this function does not understand, needs the user's approval. Conservative by design;
+ * it narrows what a reviewer can make the parent run, it is not a sandbox.
+ */
+export function classifyCommand(command: string, testCommands: string[] = []): Rerun {
+  if (squash(command) === '') return needs('empty command');
+  if (testCommands.some((t) => squash(t) === squash(command))) return auto('the repo\'s recorded test command');
+  if (META.test(command)) return needs('shell metacharacter (; & | < > backtick $ backslash parentheses braces, or a newline)');
+  const tokens = words(command);
+  if (tokens === null) return needs('unbalanced quote');
+  const [prog, ...args] = tokens as [string, ...string[]];
+  const git = prog === 'git';
+  if (!git && prog !== 'grep' && prog !== 'rg') return needs('not git, grep, rg or the recorded test command');
+  const sub = args[0] ?? '';
+  if (git && !GIT_SUBS.has(sub)) return needs(sub.startsWith('-') ? 'git option before the subcommand' : 'git subcommand is not a read-only one');
+  const bad = git ? GIT_BAD : prog === 'rg' ? RG_BAD : /(?!)/;
+  for (const arg of args) {
+    if (bad.test(arg)) return needs('option ' + arg + ' can run code or write files');
+    const value = arg.startsWith('-') ? arg.slice(arg.indexOf('=') + 1) : arg;
+    if (arg.startsWith('-') && !arg.includes('=')) continue;
+    if (leavesRepo(value)) return needs('path outside the repo: ' + value);
+  }
+  return auto('single read-only ' + (git ? 'git ' + sub : prog) + ' command over repo paths');
+}
+
+const USAGE = 'usage: review-findings.ts merge <reviewer-output-file>... | keep <findings.json> <id>... | classify <findings.json> [--test <command>]...';
+
+function loadFindings(read: Read, file: string): Merged[] | null {
+  try {
+    const findings = (JSON.parse(read(file) ?? '') as Record<string, unknown>).findings;
+    return Array.isArray(findings) ? (findings as Merged[]) : null;
+  } catch {
+    return null;
+  }
+}
+
+/** merge: parse reviewer outputs, drop the unproven, dedupe, rank. keep: the findings the parent reproduced (by id). classify: which commands the parent may rerun unasked. */
 export function main(argv: string[], out: (text: string) => void, err: (text: string) => void, read: Read = realRead): number {
   const [cmd, first, ...rest] = argv;
   if (cmd === 'merge' && first !== undefined) {
     out(JSON.stringify(summarize([first, ...rest], read)));
     return 0;
   }
-  if (cmd === 'keep' && first !== undefined) {
-    const body = read(first);
-    let findings: unknown;
-    try {
-      findings = (JSON.parse(body ?? '') as Record<string, unknown>).findings;
-    } catch {
-      findings = null;
-    }
-    if (!Array.isArray(findings)) {
-      err(`${first} is missing or not a merge result`);
+  if ((cmd === 'keep' || cmd === 'classify') && first !== undefined) {
+    const all = loadFindings(read, first);
+    if (all === null) {
+      err(first + ' is missing or not a merge result');
       return 2;
+    }
+    if (cmd === 'classify') {
+      const tests: string[] = [];
+      for (let i = 0; i < rest.length; i += 2) {
+        const value = rest[i + 1];
+        if (rest[i] !== '--test' || value === undefined) {
+          err(USAGE);
+          return 2;
+        }
+        tests.push(value);
+      }
+      const results = all.map((f) => ({ id: f.id, ...classifyCommand(f.command, tests) }));
+      out(JSON.stringify({ results, needsApproval: results.filter((r) => r.status === 'needs-approval').map((r) => r.id) }));
+      return 0;
     }
     const ids = new Set(rest);
-    const known = new Set((findings as Merged[]).map((f) => f.id));
+    const known = new Set(all.map((f) => f.id));
     const unknown = rest.filter((id) => !known.has(id));
     if (unknown.length > 0) {
-      err(`unknown finding ids: ${unknown.join(', ')}`);
+      err('unknown finding ids: ' + unknown.join(', '));
       return 2;
     }
-    const all = findings as Merged[];
     out(JSON.stringify({ kept: all.filter((f) => ids.has(f.id)), rejected: all.filter((f) => !ids.has(f.id)).map((f) => f.id) }));
     return 0;
   }

@@ -4,7 +4,7 @@ import { join } from 'node:path';
 import { describe, it } from 'node:test';
 import fc from 'fast-check';
 import { cleanupTmp, tmpDir, writeTree } from '../../scripts/test/helpers.ts';
-import { MAX_FINDINGS_PER_LENS, MAX_OUTPUT, SEVERITIES, extractReport, main, mergeFindings, parseReport, realRead, summarize, type Merged } from '../../plugins/h7/scripts/review-findings.ts';
+import { MAX_FINDINGS_PER_LENS, MAX_OUTPUT, SEVERITIES, classifyCommand, extractReport, main, mergeFindings, parseReport, realRead, summarize, type Merged } from '../../plugins/h7/scripts/review-findings.ts';
 
 cleanupTmp();
 
@@ -182,6 +182,75 @@ describe('mergeFindings', () => {
   });
 });
 
+describe('classifyCommand', () => {
+  const status = (command: string, tests: string[] = []): string => classifyCommand(command, tests).status;
+
+  it('auto-runs only single read-only git, grep and rg commands over repo paths', () => {
+    for (const command of [
+      'git diff main..HEAD -- src/a.ts',
+      'git show HEAD:src/a.ts',
+      'git log --oneline -n 5 --format=%H',
+      'git grep -n "needle here" -- src',
+      'git blame -L 1,5 src/a.ts',
+      'git ls-files src',
+      'git cat-file -p HEAD',
+      'git rev-parse HEAD~1',
+      'git status',
+      'git diff --no-ext-diff --no-textconv',
+      "grep -rn 'needle' src test",
+      'rg -n needle src/a.ts',
+      '  git   diff  ',
+    ]) {
+      assert.equal(status(command), 'auto', command);
+    }
+  });
+
+  it('needs approval for shell metacharacters of every kind', () => {
+    for (const command of ['git diff; rm -rf x', 'git diff && git log', 'git log | sh', 'git log > out.txt', 'git log < in', 'git log `id`', 'git log $(id)', 'git log $HOME', 'git log\nrm x', 'git log\rx', 'git log a\\b', 'git log (x)', 'git log {a,b}']) {
+      assert.equal(status(command), 'needs-approval', JSON.stringify(command));
+    }
+  });
+
+  it('needs approval for interpreters, other programs and unknown git subcommands', () => {
+    for (const command of ['node -e "1"', 'python -c 1', 'npm test', 'sh run.sh', './git diff', '/usr/bin/git diff', 'FOO=1 git diff', 'git', 'git push', 'git checkout main', 'git config user.name x', 'git -c core.pager=x log', 'git --no-pager log', '', '   ', "git 'log"]) {
+      assert.equal(status(command), 'needs-approval', JSON.stringify(command));
+    }
+  });
+
+  it('needs approval for options that execute programs or write files', () => {
+    for (const command of ['git diff --ext-diff', 'git diff --textconv', 'git diff --output=x.patch', 'git diff --output x', 'git log --exec=x', 'git grep -O less x', 'git grep --open-files-in-pager=x y', 'git log -c', 'git log --config=x', 'git log --upload-pack=x', 'rg --pre cat x', 'rg --pre=cat x', 'rg -z x', 'rg -nz x', 'rg --search-zip x', 'rg --hostname-bin=x y']) {
+      assert.equal(status(command), 'needs-approval', command);
+    }
+  });
+
+  it('needs approval for paths that can leave the repo, including option values', () => {
+    for (const command of ['git show /etc/passwd', 'git show C:/x', 'git diff ../other', 'git diff a/../../b', 'git diff ..', 'grep -r x ~/.ssh', 'grep x /etc/hosts', 'rg x ../x', 'git blame --contents=/etc/passwd a.ts', 'git diff --src-prefix=../x']) {
+      assert.equal(status(command), 'needs-approval', command);
+    }
+    assert.equal(status('git diff --relative=src'), 'auto');
+    assert.equal(status('git diff main...HEAD'), 'auto');
+  });
+
+  it('auto-runs the exact recorded test command, whatever its shape, and nothing similar', () => {
+    assert.equal(status('npm  test', ['npm test']), 'auto');
+    assert.equal(status('node --test a.test.ts && echo x', ['node --test a.test.ts && echo x']), 'auto');
+    assert.equal(status('npm test -- --bail', ['npm test']), 'needs-approval');
+    assert.equal(status('npm run test', ['npm test']), 'needs-approval');
+    assert.equal(status('', ['']), 'needs-approval');
+  });
+
+  it('always explains itself and never throws', () => {
+    fc.assert(fc.property(fc.string(), (command) => assert.notEqual(classifyCommand(command).reason, '')));
+  });
+
+  it('property: nothing with a shell metacharacter, or a git write option, is ever auto', () => {
+    const meta = fc.constantFrom(';', '&', '|', '>', '<', '`', '$', '\n');
+    fc.assert(fc.property(fc.constantFrom('git diff', 'git log', 'grep -r x', 'rg x'), meta, (base, bit) => assert.equal(classifyCommand(base + ' ' + bit + ' a').status, 'needs-approval')));
+    const option = fc.constantFrom('--output=x', '--ext-diff', '--textconv', '-c', '--exec=x');
+    fc.assert(fc.property(fc.constantFrom('git diff', 'git log', 'git show'), option, (base, bit) => assert.equal(classifyCommand(base + ' ' + bit + ' a').status, 'needs-approval')));
+  });
+});
+
 describe('summarize and main', () => {
   const files: Record<string, string> = {
     '/r/security.md': report('', [finding(), finding({ command: '', title: 'unproven' })]),
@@ -232,8 +301,28 @@ describe('summarize and main', () => {
     }
   });
 
+  it('classify says which finding commands may be rerun unasked', () => {
+    const merged = JSON.stringify(summarize(['/r/security.md', '/r/spec.md'], read));
+    const r = run(['classify', 'm.json', '--test', 'other'], () => merged);
+    assert.equal(r.code, 0);
+    const result = JSON.parse(r.out[0] as string) as { results: Array<{ id: string; status: string }>; needsApproval: string[] };
+    assert.deepEqual(result.results.map((x) => [x.id, x.status]), [['F1', 'auto'], ['F2', 'needs-approval']]);
+    assert.deepEqual(result.needsApproval, ['F2']);
+    assert.deepEqual(JSON.parse(run(['classify', 'm.json'], () => merged).out[0] as string).needsApproval, ['F1', 'F2']);
+  });
+
+  it('classify rejects bad options and unreadable findings', () => {
+    const merged = JSON.stringify(summarize(['/r/spec.md'], read));
+    for (const argv of [['classify', 'm.json', '--test'], ['classify', 'm.json', '--tests', 'x'], ['classify', 'm.json', 'x']]) {
+      const r = run(argv, () => merged);
+      assert.equal(r.code, 2, argv.join(' '));
+      assert.match(r.err[0] as string, /usage: review-findings\.ts/);
+    }
+    assert.equal(run(['classify', 'm.json'], () => null).code, 2);
+  });
+
   it('prints usage on bad arguments', () => {
-    for (const argv of [[], ['merge'], ['keep'], ['nope', 'x']]) {
+    for (const argv of [[], ['merge'], ['keep'], ['classify'], ['nope', 'x']]) {
       const r = run(argv);
       assert.equal(r.code, 2, argv.join(' '));
       assert.match(r.err[0] as string, /usage: review-findings\.ts/);
