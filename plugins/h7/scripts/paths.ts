@@ -10,7 +10,8 @@ export interface Paths {
   isFsRoot(target: string): boolean;
   /** Forward-slash path of target relative to root; empty for root itself, null when outside. */
   relative(root: string, target: string): string | null;
-  expand(word: string, home: string): string | null;
+  /** home null means the command may have reassigned HOME: ~ stays unresolved. */
+  expand(word: string, home: string | null): string | null;
 }
 
 export function makePaths(platform: Platform, realpath: Realpath): Paths {
@@ -55,9 +56,12 @@ export function makePaths(platform: Platform, realpath: Realpath): Paths {
   };
 
   /** Resolves a leading ~ only; any variable reference ($X, ${X}, $env:X, %X%) or ~user stays unresolved (null). */
-  const expand = (word: string, home: string): string | null => {
+  const expand = (word: string, home: string | null): string | null => {
     let s = word;
-    if (s === '~' || s.startsWith('~/') || s.startsWith('~\\')) s = home + s.slice(1);
+    if (s === '~' || s.startsWith('~/') || s.startsWith('~\\')) {
+      if (home === null) return null;
+      s = home + s.slice(1);
+    }
     if (/^~./.test(s) || /[$`]/.test(s)) return null;
     if (platform === 'win32' && /%[A-Za-z_][A-Za-z0-9_]*%/.test(s)) return null;
     return s;

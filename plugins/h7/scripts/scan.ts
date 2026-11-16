@@ -14,12 +14,16 @@ const DIRECTORY_CHANGERS = new Set(['cd', 'chdir', 'pushd', 'set-location', 'sl'
 const ENV_SETTERS = new Set(['export', 'set', 'declare', 'typeset', 'readonly']);
 const LEAVERS = new Set(['exit', 'return']);
 
-const isPipe = (op: string): boolean => op.endsWith('|') && !op.endsWith('||');
+/** HOME or USERPROFILE assigned, or named by a command that can set it: then ~ no longer means the real home. */
+const HOME_ASSIGNED =
+  /\b(?:HOME|USERPROFILE)\b\s*[+:]?=|\b(?:export|set|setx|declare|typeset|readonly|local|Set-Item|New-Item|Set-Variable)\b[^;\n|&]*\b(?:HOME|USERPROFILE)\b/i;
+
+const isPipe =(op: string): boolean => op.endsWith('|') && !op.endsWith('||');
 
 function changeDirectory(simple: Simple, state: ScanState, ctx: Ctx, mayFail: boolean): void {
   const target = simple.argv.find((arg) => !arg.startsWith('-') || arg === '-') ?? '~';
   if (target === '-') return;
-  const expanded = ctx.paths.expand(target, ctx.home);
+  const expanded = ctx.paths.expand(target, ctx.homeAssigned ? null : ctx.home);
   if (expanded === null || expanded === '') return;
   const before = [state.cwd, ...state.alt];
   const after = before.map((dir) => ctx.paths.resolve(dir, expanded));
@@ -74,6 +78,7 @@ export function scan(command: string, dialect: Dialect, ctx: Ctx, state: ScanSta
   if (depth > MAX_DEPTH) {
     return [ask('unscannable-command', 'The command nests shells too deeply to inspect. Run it as separate, simple commands.')];
   }
+  if (depth === 0 && HOME_ASSIGNED.test(command)) ctx = { ...ctx, homeAssigned: true };
   const tokens = tokenize(command, dialect);
   const found: Decision[] = [];
   const scanNested = (script: string, kind: Dialect): Decision[] => scan(script, kind, ctx, cloneState(state), depth + 1);

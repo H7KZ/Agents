@@ -119,7 +119,7 @@ const TOO_MANY = 'it has too many brace alternatives to check';
 const BROAD = 'the glob matches everything in the repository root';
 
 function checkWord(word: string, cwd: string, ctx: Ctx, root: string, home: string): string | null {
-  const expanded = ctx.paths.expand(word, ctx.home);
+  const expanded = ctx.paths.expand(word, ctx.homeAssigned ? null : ctx.home);
   if (expanded === null) return UNRESOLVED;
   const glob = /[*?[]/.exec(expanded);
   if (!glob) {
@@ -208,7 +208,7 @@ export function evaluateFind(simple: Simple, cwd: string, ctx: Ctx): Decision | 
   let unresolved = false;
   let inside = false;
   for (const start of findStarts(simple.argv)) {
-    const expanded = ctx.paths.expand(start, ctx.home);
+    const expanded = ctx.paths.expand(start, ctx.homeAssigned ? null : ctx.home);
     if (expanded === null) {
       unresolved = true;
       continue;

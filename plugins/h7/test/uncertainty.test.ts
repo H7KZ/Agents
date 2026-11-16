@@ -251,3 +251,35 @@ describe('parser uncertainty resolves to ask', () => {
     ]);
   });
 });
+
+describe('tilde with an assigned HOME', () => {
+  it('stays resolved (and blocks) when the command never touches HOME or USERPROFILE', () => {
+    table({}, [
+      ['rm -rf ~', RM],
+      ['rm -rf ~/x', RM],
+      ['rm -rf ~/', RM],
+      ['export FOO=1; rm -rf ~', RM],
+      ['echo $HOME; rm -rf ~', RM],
+      ['git -C ~ status', null],
+    ]);
+  });
+
+  it('is unresolved (ask) when the command assigns or sets HOME or USERPROFILE', () => {
+    table({}, [
+      ['HOME=/ rm -rf ~/x', RM_ASK],
+      ['HOME=/ rm -rf ~', RM_ASK],
+      ['export HOME=/x; rm -rf ~', RM_ASK],
+      ['export HOME; rm -rf ~', RM_ASK],
+      ['declare -x HOME=/x && rm -rf ~/y', RM_ASK],
+      ['USERPROFILE=/ rm -rf ~/y', RM_ASK],
+      ['HOME+=x; rm -rf ~/y', RM_ASK],
+      ['bash -c "HOME=/ rm -rf ~/x"', RM_ASK],
+      ['HOME=/ find ~ -delete', 'ask:find-delete'],
+    ]);
+    table({ dialect: 'ps', platform: 'win32' }, [
+      ["$env:USERPROFILE = 'C:\\'; Remove-Item -Recurse -Force ~\\x", RM_ASK],
+      ["Set-Item env:HOME 'C:\\'; Remove-Item -Recurse -Force ~", RM_ASK],
+      ['Remove-Item -Recurse -Force ~', RM],
+    ]);
+  });
+});

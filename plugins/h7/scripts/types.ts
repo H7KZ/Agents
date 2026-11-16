@@ -19,6 +19,8 @@ export interface Ctx {
   paths: Paths;
   git: Git;
   disk: Disk;
+  /** True when the command text assigns HOME or USERPROFILE, so ~ cannot be trusted. */
+  homeAssigned?: boolean;
   tmp: TempInfo;
 }
 
