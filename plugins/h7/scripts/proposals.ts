@@ -160,7 +160,7 @@ export function decideProposal(home: string, id: string, status: 'accepted' | 'r
   if (found === null) throw new Failure(`no such proposal: ${id}`);
   if (found.status !== 'pending') throw new Failure(`${id} is already ${found.status}`);
   const decided: Proposal = { ...found, status, decided: now.toISOString() };
-  if (note !== '') decided.note = oneLine((redactValue(note.slice(0, MAX_SHORT)) as string).trim());
+  if (note !== '') decided.note = oneLine(redactValue(note) as string).trim().slice(0, MAX_SHORT);
   replace(dir, decided);
   return decided;
 }

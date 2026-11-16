@@ -233,3 +233,14 @@ describe('main', () => {
     assert.equal(runNode(script, ['nope'], { env: { H7_HOME: undefined } }).status, 2);
   });
 });
+
+describe('note redaction', () => {
+  it('redacts a note before cutting it to length, so a secret on the boundary cannot leak a prefix', () => {
+    const home = tmpDir();
+    const { id } = addProposal(home, entry, NOW);
+    const secret = 'ghp_abcdefghijklmnopqrstuvwxyz0123456789';
+    const done = decideProposal(home, id, 'accepted', `${'x'.repeat(MAX_SHORT - 8)} ${secret}`, later);
+    assert.ok(!(done.note as string).includes('ghp_'), done.note);
+    assert.ok((done.note as string).length <= MAX_SHORT);
+  });
+});
