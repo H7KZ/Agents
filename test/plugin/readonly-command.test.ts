@@ -30,4 +30,29 @@ describe('isReadOnly', () => {
       { numRuns: runs(80) },
     );
   });
+
+  it('requires the reader as the first word, bare: no wrapper, path, extension or case trick', () => {
+    for (const text of ['env cat a', 'sudo cat a', 'doas cat a', 'timeout 5 cat a', 'nice cat a', 'nohup cat a', 'exec cat a', 'command cat a', 'builtin cat a', 'time cat a', 'xargs cat', 'find . -exec cat {} ;', './cat a', '/tmp/cat a', '/bin/cat a', 'bin/cat a', 'cat.cmd a', 'cat.ps1 a', 'cat.sh a', 'CAT a', 'Cat a', 'x=1 cat a', 'cat.exe.bat a', 'git.cmd status']) {
+      assert.equal(isReadOnly(text, 'sh'), false, text);
+    }
+    for (const text of ['CAT.cmd a', 'cat.ps1 a', '.\\cat a', 'C:\\x\\cat a', 'env cat a']) assert.equal(isReadOnly(text, 'ps'), false, text);
+    assert.equal(isReadOnly('cat.exe a', 'sh'), true);
+    assert.equal(isReadOnly('GET-CONTENT a', 'ps'), true);
+    assert.equal(isReadOnly('Git.exe status', 'ps'), true);
+    assert.equal(isReadOnly('get-content a', 'sh'), false);
+  });
+
+  it('property: any prefix word or path form before a reader is rejected', () => {
+    const prefix = fc.constantFrom('env', 'sudo', 'doas', 'timeout', 'nice', 'nohup', 'exec', 'command', 'builtin', 'time', 'xargs', 'FOO=1', 'bash', 'sh');
+    const dir = fc.constantFrom('./', '/tmp/', '/usr/bin/', '../', 'bin/', 'x\\');
+    const reader = fc.constantFrom('cat', 'ls', 'head', 'grep', 'wc');
+    fc.assert(
+      fc.property(prefix, dir, reader, (p, d, r) => {
+        assert.equal(isReadOnly(`${p} ${r} a`, 'sh'), false);
+        assert.equal(isReadOnly(`${d}${r} a`, 'sh'), false);
+        assert.equal(isReadOnly(`${r}.cmd a`, 'sh'), false);
+      }),
+      { numRuns: runs(80) },
+    );
+  });
 });
