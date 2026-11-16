@@ -61,7 +61,7 @@ describe('setup skill', () => {
 
   it('detect output has every field the skill reads', () => {
     const d = detect(tmpDir(), () => ({ status: 128, stdout: '' }));
-    const read = skill.match(/Fields: (.+)\n/) as RegExpMatchArray;
+    const read = skill.match(/Fields: (.+)/) as RegExpMatchArray;
     for (const field of ['languages', 'packageManagers', 'monorepo', 'scripts', 'tools', 'layers', 'surfaces', 'ci', 'docs', 'git', 'gaps', 'warnings']) {
       assert.ok(field in d, field);
       assert.ok((read[1] as string).includes(field), field);
