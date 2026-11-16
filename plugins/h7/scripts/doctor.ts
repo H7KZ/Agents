@@ -182,7 +182,9 @@ function workspaceCheck(env: DoctorEnv): Check {
   if (!exists(join(found.dir, found.marker.memory.agents))) notes.push(`${found.marker.memory.agents} does not exist yet (h7:setup creates it)`);
   const label = `workspace mode: ${found.dir.split(sep).join('/')} (${found.marker.repos.size} repos)`;
   if (problems.length > 0) return { id: 'workspace', status: 'fail', detail: `${label}; ${problems.join('; ')}`, fix: 'Correct the marker, create the missing files, and move any h7 state out of the repos.' };
-  return notes.length > 0 ? { id: 'workspace', status: 'warn', detail: `${label}; ${notes.join('; ')}` } : { id: 'workspace', status: 'pass', detail: label };
+  if (found.trust !== 'trusted') notes.push(`the marker is ${found.trust === 'changed' ? 'changed since you trusted it' : 'not trusted yet'}: its scratch dir, push and auto-merge are ignored`);
+  const fix = found.trust === 'trusted' ? undefined : `Read ${found.file}, then trust exactly that text in a terminal: node "${join(import.meta.dirname, 'workspace.ts')}" trust`;
+  return notes.length > 0 ? { id: 'workspace', status: 'warn', detail: `${label}; ${notes.join('; ')}`, ...(fix === undefined ? {} : { fix }) } : { id: 'workspace', status: 'pass', detail: label };
 }
 
 /** A reviewer on the author's model is not independent: say so instead of letting /h7:review quietly run without one. */

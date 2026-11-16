@@ -92,10 +92,10 @@ export function pathProblem(file: string, root: string, lstat: Lstat = safeLstat
 }
 
 /** Exclusive random temp file in the target directory, containment re-checked right before the rename. Throws on any refusal. */
-export function writeAtomic(file: string, text: string, root: string, uuid: () => string = randomUUID, lstat: Lstat = safeLstat): void {
+export function writeAtomic(file: string, text: string, root: string, uuid: () => string = randomUUID, lstat: Lstat = safeLstat, mode?: number): void {
   mkdirSync(dirname(file), { recursive: true });
   const temp = `${file}.${uuid()}.h7tmp`;
-  writeFileSync(temp, text, { flag: 'wx' });
+  writeFileSync(temp, text, { flag: 'wx', mode });
   const problem = pathProblem(file, root, lstat);
   if (problem !== null) {
     unlinkSync(temp);

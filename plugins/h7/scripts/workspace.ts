@@ -1,6 +1,9 @@
-import { lstatSync, readFileSync, realpathSync } from 'node:fs';
+import { createHash } from 'node:crypto';
+import { lstatSync, mkdirSync, readdirSync, readFileSync, realpathSync } from 'node:fs';
 import { homedir } from 'node:os';
 import path from 'node:path';
+import { createInterface } from 'node:readline/promises';
+import { writeAtomic } from './setup-files.ts';
 
 /**
  * Workspace mode: one developer's h7 state for several team repos lives OUTSIDE the repos, next to a marker file in an
@@ -12,6 +15,13 @@ export const MAX_MARKER_BYTES = 65536;
 export const MAX_REPOS = 200;
 
 export class WorkspaceError extends Error {}
+
+/**
+ * Whether the user vouched for these exact marker contents: the sha256 of the marker text is recorded in the owner-only `<home>/.h7/workspaces.json`
+ * (written only by `workspace.ts trust`, interactively). An untrusted or changed marker still gives paths, base and memory names; its scratch dir,
+ * auto-merge and push are ignored.
+ */
+export type Trust = 'trusted' | 'untrusted' | 'changed';
 
 export interface RepoSettings {
   base: string | null;
@@ -120,6 +130,7 @@ export function parseMarker(text: string): Marker {
 export interface Stat {
   isSymbolicLink(): boolean;
   isFile(): boolean;
+  isDirectory(): boolean;
   size: number;
   uid: number;
   mode: number;
@@ -132,6 +143,8 @@ export interface FsIo {
   /** Throws when the path does not exist. */
   realpath(file: string): string;
   read(file: string): string;
+  /** Entry names; throws when the directory cannot be read. */
+  readdir(dir: string): string[];
 }
 
 export const realFsIo: FsIo = {
@@ -146,9 +159,33 @@ export const realFsIo: FsIo = {
   },
   realpath: (file) => realpathSync(file),
   read: (file) => readFileSync(file, 'utf8'),
+  readdir: (dir) => readdirSync(dir),
 };
 
 export const defaultHome = (): string => process.env.H7_HOME ?? homedir();
+
+export const sha256 = (text: string): string => createHash('sha256').update(text, 'utf8').digest('hex');
+export const trustFile = (home: string): string => path.join(home, '.h7', 'workspaces.json');
+
+/** Recorded hashes by lowercased marker path; empty for a missing, unreadable or malformed file. */
+export function readTrust(io: FsIo, home: string): Map<string, string> {
+  const hashes = new Map<string, string>();
+  let raw: unknown;
+  try {
+    raw = JSON.parse(io.read(trustFile(home)));
+  } catch {
+    return hashes;
+  }
+  if (typeof raw !== 'object' || raw === null || Array.isArray(raw)) return hashes;
+  for (const [file, hash] of Object.entries(raw)) if (typeof hash === 'string') hashes.set(fold(file), hash.toLowerCase());
+  return hashes;
+}
+
+export function trustOf(io: FsIo, home: string, file: string, text: string): Trust {
+  const recorded = readTrust(io, home).get(fold(file));
+  if (recorded === undefined) return 'untrusted';
+  return recorded === sha256(text) ? 'trusted' : 'changed';
+}
 
 const slash = (p: string): string => p.split(path.sep).join('/');
 
@@ -202,7 +239,9 @@ export interface Workspace {
   marker: Marker;
   /** As declared, except push and auto-merge are dropped when the marker owner could not be verified. */
   settings: RepoSettings;
-  /** The marker and its directory passed the ownership checks (POSIX only). */
+  /** Hash trust of the marker contents (see Trust). */
+  trust: Trust;
+  /** Ownership verified (POSIX) AND the contents are trusted: only then are scratch, push and auto-merge honoured. */
   trusted: boolean;
   /** Absolute paths, all checked to stay inside the workspace. */
   files: { verification: string; prTemplate: string | null; agents: string; glossary: string; adr: string };
@@ -217,7 +256,7 @@ function checkOwner(path: string, what: string, io: FsIo): void {
   if ((stat.mode & 0o022) !== 0) throw fail(`${what} ${path} is writable by group or others (mode ${(stat.mode & 0o777).toString(8)}); refusing to trust it`);
 }
 
-function readMarker(file: string, io: FsIo): Marker {
+function readMarker(file: string, io: FsIo): { marker: Marker; text: string } {
   const stat = io.lstat(file) as Stat;
   if (stat.isSymbolicLink()) throw fail(`${file} is a symlink; refusing to follow it`);
   if (!stat.isFile()) throw fail(`${file} is not a regular file`);
@@ -229,13 +268,13 @@ function readMarker(file: string, io: FsIo): Marker {
     throw fail(`cannot read ${file}: ${(error as Error).message}`);
   }
   try {
-    return parseMarker(text);
+    return { marker: parseMarker(text), text };
   } catch (error) {
     throw fail(`${file}: ${(error as Error).message}`);
   }
 }
 
-function build(root: string, file: string, marker: Marker, key: string, real: string, io: FsIo): Workspace {
+function build(root: string, file: string, marker: Marker, key: string, real: string, io: FsIo, trust: Trust): Workspace {
   const confine = (rel: string, what: string): string => {
     const abs = path.join(root, rel);
     if (!inside(root, canonicalPath(io, abs))) throw fail(`${file}: ${what} resolves outside the workspace (symlink?)`);
@@ -250,7 +289,7 @@ function build(root: string, file: string, marker: Marker, key: string, real: st
   const stateDir = outsideRepos(confine(`${marker.stateDir}/${key}`, 'stateDir'), 'stateDir');
   const scratch = marker.scratch === null ? null : outsideRepos(confine(marker.scratch, 'scratch'), 'scratch');
   // Push and auto-merge are only honoured from a marker whose ownership was actually verified (POSIX); elsewhere the user says so per run.
-  const trusted = io.uid !== null;
+  const trusted = io.uid !== null && trust === 'trusted';
   const declared = marker.repos.get(key) as RepoSettings;
   const settings: RepoSettings = { ...declared, ship: trusted ? declared.ship : 'pr', autoMerge: trusted && declared.autoMerge };
   const glossary = marker.memory.glossary ?? glossaryName(io, root);
@@ -262,6 +301,7 @@ function build(root: string, file: string, marker: Marker, key: string, real: st
     stateDir,
     marker,
     settings,
+    trust,
     trusted,
     files: {
       verification: confine(settings.verification, 'verification'),
@@ -288,9 +328,9 @@ export function workspaceFor(repoRoot: string, io: FsIo, home: string): Workspac
     if (io.lstat(file) === null) continue;
     checkOwner(file, 'workspace marker', io);
     checkOwner(dir, 'workspace directory', io);
-    const marker = readMarker(file, io);
+    const { marker, text } = readMarker(file, io);
     const key = [...marker.repos.keys()].find((name) => fold(name) === fold(slash(path.relative(dir, real))));
-    if (key !== undefined) return build(dir, file, marker, key, real, io);
+    if (key !== undefined) return build(dir, file, marker, key, real, io, trustOf(io, home, file, text));
   }
   return null;
 }
@@ -299,6 +339,8 @@ export interface Located {
   dir: string;
   file: string;
   marker: Marker;
+  text: string;
+  trust: Trust;
 }
 
 /** The nearest trusted marker at or above cwd (strictly inside the real home), listing cwd's repo or not. For doctor. Same trust rules and errors as workspaceFor. */
@@ -310,24 +352,54 @@ export function locateMarker(cwd: string, io: FsIo, home: string): Located | nul
     if (io.lstat(file) === null) continue;
     checkOwner(file, 'workspace marker', io);
     checkOwner(dir, 'workspace directory', io);
-    return { dir, file, marker: readMarker(file, io) };
+    const { marker, text } = readMarker(file, io);
+    return { dir, file, marker, text, trust: trustOf(io, home, file, text) };
   }
   return null;
 }
 
+export const MAX_SCRATCH_ENTRIES = 2000;
+
+/** True when any directory at or below dir (symlinks not followed) has a .git entry; too large a tree counts as yes. */
+function gitBelow(io: FsIo, dir: string, budget: { left: number }): boolean {
+  let names: string[];
+  try {
+    names = io.readdir(dir);
+  } catch {
+    return false;
+  }
+  for (const name of names) {
+    budget.left -= 1;
+    if (name === '.git' || budget.left < 0) return true;
+    const child = path.join(dir, name);
+    const stat = io.lstat(child);
+    if (stat !== null && !stat.isSymbolicLink() && stat.isDirectory() && gitBelow(io, child, budget)) return true;
+  }
+  return false;
+}
+
+/** True when dir or any directory above it up to (not including) home has a .git entry: dir lies inside a git work tree. */
+function insideWorkTree(io: FsIo, dir: string, realHome: string): boolean {
+  for (let current = dir; inside(realHome, current) && fold(current) !== fold(realHome); current = path.dirname(current)) {
+    if (io.lstat(path.join(current, '.git')) !== null) return true;
+  }
+  return false;
+}
+
 /**
- * The declared scratch directory of the nearest trusted marker above cwd (resolved, real path inside the workspace, not the workspace root, not inside
- * a repo), as a one-element list; empty for anything doubtful. The guard counts deletes strictly inside it as inside the repo.
+ * The scratch directory the guard counts as inside the repo, as a one-element list; empty for anything doubtful. It comes ONLY from the validated
+ * workspace of the current repo (marker strictly above the repo root, listing it, owner verified: where ownership cannot be checked there is no
+ * scratch), and additionally must not contain or sit inside any git work tree, and the marker's own directory must not either.
  */
 export function scratchDirs(cwd: string, io: FsIo, home: string): string[] {
   try {
-    const found = locateMarker(cwd, io, home);
-    if (found === null || found.marker.scratch === null) return [];
-    const root = canonicalPath(io, found.dir);
-    const scratch = canonicalPath(io, path.join(root, found.marker.scratch));
-    const repos = [...found.marker.repos.keys()].map((key) => canonicalPath(io, path.join(root, key)));
-    const ok = inside(root, scratch) && fold(scratch) !== fold(root) && !repos.some((repo) => inside(repo, scratch));
-    return ok ? [scratch] : [];
+    const repoRoot = findRepoRoot(cwd, io);
+    const ws = repoRoot === null ? null : workspaceFor(repoRoot, io, home);
+    if (ws === null || !ws.trusted || ws.scratch === null) return [];
+    const realHome = canonicalPath(io, home);
+    const scratch = canonicalPath(io, ws.scratch);
+    if (insideWorkTree(io, scratch, realHome) || insideWorkTree(io, ws.root, realHome) || gitBelow(io, scratch, { left: MAX_SCRATCH_ENTRIES })) return [];
+    return [scratch];
   } catch {
     return [];
   }
@@ -424,16 +496,21 @@ export function memory(cwd: string, io: FsIo = realFsIo, home?: string): Memory 
   return { agents: path.join(root, 'AGENTS.md'), glossary: path.join(root, glossaryName(io, root)), adr: path.join(root, 'docs', 'adr') };
 }
 
-const USAGE = 'usage: workspace.ts show | state-dir';
+const USAGE = 'usage: workspace.ts show | state-dir | status | trust [<marker>]';
 
 export function main(argv: string[], out: (text: string) => void, err: (text: string) => void, cwd: string = process.cwd(), io: FsIo = realFsIo, home: string = defaultHome()): number {
   const [cmd, ...rest] = argv;
-  if ((cmd !== 'show' && cmd !== 'state-dir') || rest.length > 0) {
+  if ((cmd !== 'show' && cmd !== 'state-dir' && cmd !== 'status') || rest.length > 0) {
     err(USAGE);
     return 2;
   }
   try {
     const context = resolveContext(cwd, io, home);
+    if (cmd === 'status') {
+      const found = locateMarker(cwd, io, home);
+      out(JSON.stringify(found === null ? { marker: null } : { marker: slash(found.file), sha256: sha256(found.text), trust: found.trust, ownerVerified: io.uid !== null, note: found.trust === 'trusted' ? 'scratch, push and auto-merge from this marker are honoured' : 'scratch, push and auto-merge are ignored until you run: workspace.ts trust' }));
+      return 0;
+    }
     if (cmd === 'state-dir') {
       out(slash(context.stateDir));
       return 0;
@@ -455,6 +532,8 @@ export function main(argv: string[], out: (text: string) => void, err: (text: st
       autoMerge: s.autoMerge,
       memory: { agents: slash(m.agents), glossary: slash(m.glossary), adr: slash(m.adr) },
       scratch: ws === null ? null : orNull(ws.scratch),
+      trust: ws === null ? null : ws.trust,
+      trusted: ws === null ? null : ws.trusted,
     }));
     return 0;
   } catch (error) {
@@ -463,6 +542,81 @@ export function main(argv: string[], out: (text: string) => void, err: (text: st
   }
 }
 
+export interface TrustDeps {
+  isTTY: boolean;
+  prompt(question: string): Promise<string>;
+  mkdir(dir: string): void;
+  write(file: string, text: string, root: string): void;
+}
+
+/** The terminal glue: the prompt reads one line from stdin; trustMain refuses unless both ends are a TTY. */
+export const realTrustDeps = (): TrustDeps => ({
+  isTTY: [process.stdin, process.stdout].every((stream) => stream.isTTY === true),
+  prompt: async (question) => {
+    const lines = createInterface({ input: process.stdin, output: process.stdout });
+    try {
+      return await lines.question(question);
+    } finally {
+      lines.close();
+    }
+  },
+  mkdir: (dir) => void mkdirSync(dir, { recursive: true, mode: 0o700 }),
+  write: (file, text, root) => writeAtomic(file, text, root, undefined, undefined, 0o600),
+});
+
+/**
+ * `workspace.ts trust [<marker>]`: shows the marker, asks the person at a terminal to type "yes", and records the sha256 of exactly that text in the
+ * owner-only trust file. Refuses without a TTY (an agent cannot answer), for a marker that is not trustworthy, and for a malformed trust file.
+ */
+export async function trustMain(args: string[], out: (text: string) => void, err: (text: string) => void, cwd: string, io: FsIo, home: string, deps: TrustDeps): Promise<number> {
+  if (!deps.isTTY) {
+    err('refusing: trusting a workspace marker needs an interactive terminal (stdin is not a TTY). Run this yourself in a terminal; an agent cannot do it.');
+    return 2;
+  }
+  try {
+    const [target, ...extra] = args;
+    if (extra.length > 0) throw fail(USAGE);
+    const start = target === undefined ? cwd : path.resolve(cwd, path.basename(target) === MARKER ? path.dirname(target) : target);
+    const found = locateMarker(start, io, home);
+    if (found === null || (target !== undefined && fold(found.dir) !== fold(canonicalPath(io, start)))) throw fail(`no ${MARKER} found ${target === undefined ? 'above here' : `in ${target}`}`);
+    out(`Marker: ${found.file}\nSHA-256: ${sha256(found.text)}\nState: ${found.trust}\n----\n${found.text}\n----\nTrusting it lets this workspace set a scratch directory the guard treats as safe to delete in, and ship defaults (push, auto-merge).`);
+    if ((await deps.prompt('Type yes to trust exactly this text: ')).trim() !== 'yes') {
+      err('not trusted');
+      return 1;
+    }
+    const existing = readTrustText(io, home);
+    existing[found.file] = sha256(found.text);
+    deps.mkdir(path.dirname(trustFile(home)));
+    deps.write(trustFile(home), `${JSON.stringify(existing, null, 2)}\n`, home);
+    out(`trusted ${found.file}`);
+    return 0;
+  } catch (error) {
+    err(error instanceof WorkspaceError ? error.message : `workspace failed: ${(error as Error).message}`);
+    return 2;
+  }
+}
+
+/** The trust file as a plain object, to be extended; absent means empty, a malformed one is an error (never silently replaced). */
+function readTrustText(io: FsIo, home: string): Record<string, string> {
+  let text: string;
+  try {
+    text = io.read(trustFile(home));
+  } catch {
+    return {};
+  }
+  let raw: unknown;
+  try {
+    raw = JSON.parse(text);
+  } catch {
+    throw fail(`${trustFile(home)} is not valid JSON; fix or remove it`);
+  }
+  if (typeof raw !== 'object' || raw === null || Array.isArray(raw)) throw fail(`${trustFile(home)} must be a JSON object; fix or remove it`);
+  return Object.fromEntries(Object.entries(raw).filter((entry): entry is [string, string] => typeof entry[1] === 'string'));
+}
+
 if (import.meta.main) {
-  process.exitCode = main(process.argv.slice(2), (t) => console.log(t), (t) => console.error(t));
+  const [cmd, ...rest] = process.argv.slice(2);
+  const out = (text: string): void => console.log(text);
+  const err = (text: string): void => console.error(text);
+  process.exitCode = cmd === 'trust' ? await trustMain(rest, out, err, process.cwd(), realFsIo, defaultHome(), realTrustDeps()) : main(process.argv.slice(2), out, err);
 }

@@ -1,5 +1,7 @@
 import assert from 'node:assert/strict';
-import { mkdirSync, symlinkSync, writeFileSync } from 'node:fs';
+import { spawnSync } from 'node:child_process';
+import { mkdirSync, readFileSync, statSync, symlinkSync, writeFileSync } from 'node:fs';
+import { pathToFileURL } from 'node:url';
 import { join } from 'node:path';
 import { describe, it } from 'node:test';
 import fc from 'fast-check';
@@ -21,9 +23,16 @@ import {
   realFsIo,
   resolveContext,
   settings,
+  readTrust,
+  sha256,
   stateDir,
+  trustFile,
+  trustMain,
+  realTrustDeps,
+  trustOf,
   workspaceFor,
   type FsIo,
+  type TrustDeps,
 } from '../../plugins/h7/scripts/workspace.ts';
 
 cleanupTmp();
@@ -41,6 +50,12 @@ function makeWs(marker: unknown = { version: 1, repos: { web: { base: 'develop' 
   for (const repo of repos) mkdirSync(join(ws, repo, '.git'), { recursive: true });
   if (marker !== null) writeFileSync(join(ws, MARKER), typeof marker === 'string' ? marker : json(marker));
   return { ws, home };
+}
+
+/** Records the hash of the marker as it is now (or of the given text) the way `workspace.ts trust` does. */
+function trustIt(home: string, ws: string, text?: string): void {
+  mkdirSync(join(home, '.h7'), { recursive: true });
+  writeFileSync(trustFile(home), JSON.stringify({ [join(ws, MARKER)]: sha256(text ?? readFileSync(join(ws, MARKER), 'utf8')) }));
 }
 
 const rejects = (text: string, pattern: RegExp): void => assert.throws(() => parseMarker(text), (error: unknown) => error instanceof WorkspaceError && pattern.test(error.message));
@@ -276,7 +291,7 @@ describe('workspace resolution', () => {
 
   it('refuses a symlinked marker and an unreadable one', () => {
     const { ws, home } = makeWs();
-    const fake = (link: boolean): FsIo => ({ ...realFsIo, lstat: (file) => (file.endsWith(MARKER) ? { isSymbolicLink: () => link, isFile: () => true, size: 3, uid: 0, mode: 0 } : realFsIo.lstat(file)), read: () => { throw new Error('EACCES'); } });
+    const fake = (link: boolean): FsIo => ({ ...realFsIo, lstat: (file) => (file.endsWith(MARKER) ? { isSymbolicLink: () => link, isFile: () => true, isDirectory: () => false, size: 3, uid: 0, mode: 0 } : realFsIo.lstat(file)), read: () => { throw new Error('EACCES'); } });
     assert.throws(() => findWorkspace(join(ws, 'web'), fake(true), home), /symlink/);
     assert.throws(() => findWorkspace(join(ws, 'web'), fake(false), home), /cannot read .*EACCES/);
   });
@@ -337,7 +352,7 @@ function owned(ws: string, uid: number | null, fileMode: number, dirMode = 0o755
       const stat = realFsIo.lstat(file);
       if (stat === null || (!file.endsWith(MARKER) && file !== ws)) return stat;
       const marker = file.endsWith(MARKER);
-      return { isSymbolicLink: () => stat.isSymbolicLink(), isFile: () => stat.isFile(), size: stat.size, uid: (marker ? fileUid : dirUid) ?? 0, mode: marker ? fileMode : dirMode };
+      return { isSymbolicLink: () => stat.isSymbolicLink(), isFile: () => stat.isFile(), isDirectory: () => stat.isDirectory(), size: stat.size, uid: (marker ? fileUid : dirUid) ?? 0, mode: marker ? fileMode : dirMode };
     },
   };
 }
@@ -348,6 +363,7 @@ describe('marker trust', () => {
 
   it('accepts a marker and directory owned by the user and not writable by others', () => {
     const { ws, home } = makeWs(RISKY, ['web']);
+    trustIt(home, ws);
     for (const mode of [0o600, 0o644, 0o640]) {
       const found = findWorkspace(join(ws, 'web'), owned(ws, UID, mode), home);
       assert.deepEqual([found?.trusted, found?.settings.ship, found?.settings.autoMerge], [true, 'push', true]);
@@ -379,6 +395,7 @@ describe('marker trust', () => {
 
   it('where ownership cannot be checked (Windows) the marker still works, but push and auto-merge are not honoured', () => {
     const { ws, home } = makeWs(RISKY, ['web']);
+    trustIt(home, ws);
     const found = findWorkspace(join(ws, 'web'), owned(ws, null, 0o666, 0o777), home);
     assert.deepEqual([found?.trusted, found?.settings.ship, found?.settings.autoMerge], [false, 'pr', false]);
     assert.deepEqual([found?.marker.repos.get('web')?.ship, found?.marker.repos.get('web')?.autoMerge], ['push', true]);
@@ -390,6 +407,7 @@ describe('marker trust', () => {
     fc.assert(
       fc.property(fc.boolean(), fc.boolean(), fc.constantFrom('pr', 'push'), (autoMerge, ownerKnown, ship) => {
         const { ws, home } = makeWs({ version: 1, repos: { web: { ship, autoMerge } } }, ['web']);
+        trustIt(home, ws);
         const found = findWorkspace(join(ws, 'web'), owned(ws, ownerKnown ? UID : null, 0o600), home);
         assert.equal(found?.settings.autoMerge, ownerKnown && autoMerge);
         assert.equal(found?.settings.ship, ownerKnown ? ship : 'pr');
@@ -402,6 +420,218 @@ describe('marker trust', () => {
     assert.equal(realFsIo.uid === null, process.platform === 'win32');
   });
 });
+
+describe('hash trust', () => {
+  const UID = 1000;
+  const RISKY = { version: 1, repos: { web: { ship: 'push', autoMerge: true } }, scratch: 'tmp' };
+
+  it('a marker nobody vouched for gives paths and base but no push, auto-merge or scratch', () => {
+    const { ws, home } = makeWs({ ...RISKY, repos: { web: { ship: 'push', autoMerge: true, base: 'develop' } } }, ['web']);
+    const found = findWorkspace(join(ws, 'web'), owned(ws, UID, 0o644), home);
+    assert.deepEqual([found?.trust, found?.trusted, found?.settings.ship, found?.settings.autoMerge, found?.settings.base], ['untrusted', false, 'pr', false, 'develop']);
+    assert.equal(found?.stateDir, join(ws, '.h7', 'web'));
+    assert.equal(found?.scratch, join(ws, 'tmp'));
+  });
+
+  it('a recorded hash trusts exactly those contents, and any edit makes it changed', () => {
+    const { ws, home } = makeWs(RISKY, ['web']);
+    trustIt(home, ws);
+    assert.deepEqual([findWorkspace(join(ws, 'web'), owned(ws, UID, 0o644), home)?.trust, findWorkspace(join(ws, 'web'), owned(ws, UID, 0o644), home)?.trusted], ['trusted', true]);
+    writeFileSync(join(ws, MARKER), json({ ...RISKY, scratch: 'elsewhere' }));
+    const changed = findWorkspace(join(ws, 'web'), owned(ws, UID, 0o644), home);
+    assert.deepEqual([changed?.trust, changed?.trusted, changed?.settings.autoMerge], ['changed', false, false]);
+    writeFileSync(join(ws, MARKER), `${json(RISKY)} `);
+    assert.equal(findWorkspace(join(ws, 'web'), owned(ws, UID, 0o644), home)?.trust, 'changed');
+  });
+
+  it('a trusted hash does not help where ownership cannot be verified', () => {
+    const { ws, home } = makeWs(RISKY, ['web']);
+    trustIt(home, ws);
+    const found = findWorkspace(join(ws, 'web'), owned(ws, null, 0o644), home);
+    assert.deepEqual([found?.trust, found?.trusted, found?.settings.autoMerge], ['trusted', false, false]);
+  });
+
+  it('reads the trust file defensively', () => {
+    const { ws, home } = makeWs(RISKY, ['web']);
+    const file = join(ws, MARKER);
+    for (const body of ['{nope', '[]', 'null', '"x"', '{"a":1}']) {
+      mkdirSync(join(home, '.h7'), { recursive: true });
+      writeFileSync(trustFile(home), body);
+      assert.equal(trustOf(realFsIo, home, file, 'text'), 'untrusted', body);
+    }
+    assert.equal(readTrust(realFsIo, tmpDir('h7-no-trust-')).size, 0);
+    writeFileSync(trustFile(home), JSON.stringify({ [file.toUpperCase()]: sha256('t').toUpperCase() }));
+    assert.equal(trustOf(realFsIo, home, file, 't'), 'trusted');
+    assert.equal(trustOf(realFsIo, home, file, 'u'), 'changed');
+  });
+
+  it('property: only the exact recorded text is trusted', () => {
+    const { home, ws } = makeWs();
+    mkdirSync(join(home, '.h7'), { recursive: true });
+    fc.assert(
+      fc.property(fc.string(), fc.string(), (a, b) => {
+        writeFileSync(trustFile(home), JSON.stringify({ [join(ws, MARKER)]: sha256(a) }));
+        assert.equal(trustOf(realFsIo, home, join(ws, MARKER), b), a === b ? 'trusted' : 'changed');
+      }),
+      { numRuns: runs(40) },
+    );
+  });
+});
+
+describe('workspace.ts status and trust', () => {
+  const sh = (): { out: string[]; err: string[]; o: (t: string) => void; e: (t: string) => void } => {
+    const out: string[] = [];
+    const err: string[] = [];
+    return { out, err, o: (t) => out.push(t), e: (t) => err.push(t) };
+  };
+  const deps = (answer: string, tty = true): TrustDeps & { prompts: string[]; written: Array<[string, string, string]>; dirs: string[] } => {
+    const prompts: string[] = [];
+    const written: Array<[string, string, string]> = [];
+    const dirs: string[] = [];
+    return {
+      isTTY: tty,
+      prompt: async (q) => {
+        prompts.push(q);
+        return answer;
+      },
+      mkdir: (dir) => void dirs.push(dir),
+      write: (file, text, root) => void written.push([file, text, root]),
+      prompts,
+      written,
+      dirs,
+    };
+  };
+
+  it('status reports untrusted, then trusted, then changed, and null without a marker', () => {
+    const { ws, home } = makeWs(MIN, ['web']);
+    const s = sh();
+    const status = (cwd: string): Record<string, unknown> => {
+      s.out.length = 0;
+      assert.equal(main(['status'], s.o, s.e, cwd, realFsIo, home), 0);
+      return JSON.parse(s.out[0] as string);
+    };
+    assert.equal(status(join(ws, 'web')).trust, 'untrusted');
+    assert.match(status(ws).note as string, /ignored until you run: workspace.ts trust/);
+    assert.equal(status(ws).sha256, sha256(MIN));
+    trustIt(home, ws);
+    const ok = status(join(ws, 'web'));
+    assert.deepEqual([ok.trust, ok.ownerVerified === (realFsIo.uid !== null), /honoured/.test(ok.note as string)], ['trusted', true, true]);
+    writeFileSync(join(ws, MARKER), `${MIN} `);
+    assert.equal(status(ws).trust, 'changed');
+    assert.deepEqual(status(tmpDir('h7-elsewhere-')), { marker: null });
+    const shown = JSON.parse((main(['show'], s.o, s.e, join(ws, 'web'), realFsIo, home), s.out.at(-1)) as string);
+    assert.deepEqual([shown.trust, shown.trusted], ['changed', false]);
+    const plain = makeWs(null, ['web']);
+    const none = JSON.parse((main(['show'], s.o, s.e, join(plain.ws, 'web'), realFsIo, plain.home), s.out.at(-1)) as string);
+    assert.deepEqual([none.trust, none.trusted], [null, null]);
+  });
+
+  it('refuses without a terminal and writes nothing', async () => {
+    const { ws, home } = makeWs(MIN, ['web']);
+    const s = sh();
+    const d = deps('yes', false);
+    assert.equal(await trustMain([], s.o, s.e, join(ws, 'web'), realFsIo, home, d), 2);
+    assert.match(s.err[0] as string, /needs an interactive terminal/);
+    assert.deepEqual([d.prompts, d.written, d.dirs], [[], [], []]);
+  });
+
+  it('shows the marker, and anything but a typed yes trusts nothing', async () => {
+    const { ws, home } = makeWs(MIN, ['web']);
+    for (const answer of ['', 'y', 'YES', 'no', 'yes please']) {
+      const s = sh();
+      const d = deps(answer);
+      assert.equal(await trustMain([], s.o, s.e, join(ws, 'web'), realFsIo, home, d), 1, answer);
+      assert.ok((s.out[0] as string).includes(MIN) && (s.out[0] as string).includes(sha256(MIN)));
+      assert.deepEqual(d.written, []);
+    }
+  });
+
+  it('records the hash of exactly the shown text, keeping other entries, and the marker is then trusted', async () => {
+    const { ws, home } = makeWs(MIN, ['web']);
+    mkdirSync(join(home, '.h7'), { recursive: true });
+    writeFileSync(trustFile(home), JSON.stringify({ '/other/.h7-workspace.json': 'abc', bad: 3 }));
+    const s = sh();
+    const d = deps(' yes ');
+    assert.equal(await trustMain([], s.o, s.e, join(ws, 'web'), realFsIo, home, d), 0);
+    assert.equal(d.written.length, 1);
+    const [file, text, root] = d.written[0] as [string, string, string];
+    assert.deepEqual([file, root, d.dirs], [trustFile(home), home, [join(home, '.h7')]]);
+    assert.deepEqual(JSON.parse(text), { '/other/.h7-workspace.json': 'abc', [join(ws, MARKER)]: sha256(MIN) });
+    writeFileSync(trustFile(home), text);
+    assert.equal(trustOf(realFsIo, home, join(ws, MARKER), MIN), 'trusted');
+    assert.match(s.out.at(-1) as string, /^trusted /);
+  });
+
+  it('takes an explicit marker path or directory, and rejects other places', async () => {
+    const { ws, home } = makeWs(MIN, ['web']);
+    for (const target of [join(ws, MARKER), ws, join(ws, '..', 'team')]) {
+      const d = deps('yes');
+      assert.equal(await trustMain([target], () => undefined, () => undefined, tmpDir('h7-cwd-'), realFsIo, home, d), 0, target);
+      assert.equal(d.written.length, 1);
+    }
+    const s = sh();
+    const d = deps('yes');
+    assert.equal(await trustMain([join(ws, 'web')], s.o, s.e, ws, realFsIo, home, d), 2);
+    assert.match(s.err[0] as string, /no \.h7-workspace\.json found in /);
+    assert.equal(await trustMain(['relative'], s.o, s.e, ws, realFsIo, home, d), 2);
+    assert.equal(await trustMain([], s.o, s.e, tmpDir('h7-cwd-'), realFsIo, home, d), 2);
+    assert.match(s.err.at(-1) as string, /found above here/);
+    assert.equal(await trustMain(['a', 'b'], s.o, s.e, ws, realFsIo, home, d), 2);
+    assert.deepEqual(d.written, []);
+  });
+
+  it('refuses a malformed trust file instead of replacing it, and reports an untrustworthy marker', async () => {
+    const { ws, home } = makeWs(MIN, ['web']);
+    mkdirSync(join(home, '.h7'), { recursive: true });
+    for (const body of ['{nope', '[1]']) {
+      writeFileSync(trustFile(home), body);
+      const s = sh();
+      const d = deps('yes');
+      assert.equal(await trustMain([], s.o, s.e, join(ws, 'web'), realFsIo, home, d), 2);
+      assert.match(s.err[0] as string, /workspaces\.json (is not valid JSON|must be a JSON object)/);
+      assert.deepEqual(d.written, []);
+    }
+    writeFileSync(join(ws, MARKER), '{bad');
+    const s = sh();
+    assert.equal(await trustMain([], s.o, s.e, join(ws, 'web'), realFsIo, home, deps('yes')), 2);
+    assert.match(s.err[0] as string, /not valid JSON/);
+    const boom = sh();
+    const throwing = { ...realFsIo, lstat: () => { throw new Error('kaput'); } };
+    assert.equal(await trustMain([], boom.o, boom.e, ws, throwing, home, deps('yes')), 2);
+    assert.match(boom.err[0] as string, /workspace failed: kaput/);
+  });
+
+  it('the real terminal glue: prompt reads a line, mkdir and write make an owner-only file', () => {
+    const real = realTrustDeps();
+    assert.equal(typeof real.isTTY, 'boolean');
+    const home = tmpDir('h7-glue-');
+    real.mkdir(join(home, '.h7'));
+    real.write(trustFile(home), '{"a":"b"}', home);
+    assert.equal(readFileSync(trustFile(home), 'utf8'), '{"a":"b"}');
+    if (process.platform !== 'win32') assert.equal(statSync(trustFile(home)).mode & 0o077, 0);
+    const code = `import { realTrustDeps } from ${JSON.stringify(pathToFileURL(SCRIPT).href)}; console.log(JSON.stringify(await realTrustDeps().prompt('q? ')));`;
+    const result = spawnSync(process.execPath, ['--input-type=module', '-e', code], { input: ['yes', 'ignored', ''].join('\n'), encoding: 'utf8' });
+    assert.equal(result.status, 0, result.stderr);
+    assert.match(result.stdout, /"yes"/);
+  });
+
+  it('the script refuses without a terminal', SLOW, () => {
+    const { ws, home } = makeWs(MIN, ['web']);
+    const result = runNode(SCRIPT, ['trust'], { cwd: join(ws, 'web'), env: { H7_HOME: home } });
+    assert.equal(result.status, 2);
+    assert.match(result.stderr, /interactive terminal/);
+    assert.ok(!existsSyncSafe(trustFile(home)));
+  });
+});
+
+function existsSyncSafe(file: string): boolean {
+  try {
+    readFileSync(file);
+    return true;
+  } catch {
+    return false;
+  }
+}
 
 describe('workspace.ts command line', () => {
   const run = (cwd: string, args: string[], home: string, extra: Record<string, string> = {}): ReturnType<typeof main> extends number ? { code: number; out: string[]; err: string[] } : never => {

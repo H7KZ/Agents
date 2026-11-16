@@ -5,7 +5,7 @@ import { describe, it } from 'node:test';
 import fc from 'fast-check';
 import { runChecks, type Check, type DoctorEnv } from '../../plugins/h7/scripts/doctor.ts';
 import { similarity, unmarkedCopies } from '../../plugins/h7/scripts/duplicates.ts';
-import { MARKER } from '../../plugins/h7/scripts/workspace.ts';
+import { MARKER, sha256, trustFile } from '../../plugins/h7/scripts/workspace.ts';
 import { cleanupTmp, tmpDir, writeTree } from '../../scripts/test/helpers.ts';
 
 cleanupTmp();
@@ -28,13 +28,15 @@ const slash = (p: string): string => p.split('\\').join('/');
 
 describe('workspace check', () => {
   /** <home>/team with the marker, repos web and server, and the files the marker names. */
-  function ws(marker: unknown, extra: Record<string, string> = {}): { e: DoctorEnv; dir: string } {
+  function ws(marker: unknown, extra: Record<string, string> = {}, trust: 'yes' | 'no' | 'changed' = 'yes'): { e: DoctorEnv; dir: string } {
     const e = env();
     const dir = join(e.home, 'team');
     mkdirSync(join(dir, 'web', '.git'), { recursive: true });
     mkdirSync(join(dir, 'server', '.git'), { recursive: true });
     writeTree(dir, { 'docs/agents/verification-web.md': '', 'docs/agents/verification-server.md': '', 'AGENTS.md': '', ...extra });
-    writeFileSync(join(dir, MARKER), typeof marker === 'string' ? marker : JSON.stringify(marker));
+    const text = typeof marker === 'string' ? marker : JSON.stringify(marker);
+    writeFileSync(join(dir, MARKER), text);
+    if (trust !== 'no') writeFileSync(trustFile(e.home), JSON.stringify({ [join(dir, MARKER)]: sha256(trust === 'yes' ? text : `${text} `) }));
     return { e: { ...e, cwd: join(dir, 'web') }, dir };
   }
   const good = { version: 1, repos: { web: {}, server: {} } };
@@ -59,6 +61,16 @@ describe('workspace check', () => {
     assert.equal(check.status, 'fail');
     for (const part of ['repo ghost does not exist', 'repo plain does not exist', 'repo web contains .h7/', 'repo server contains docs/agents/', 'web: docs/pr.md does not exist', 'plain: v.md does not exist']) assert.ok(check.detail.includes(part), part);
     assert.ok(check.fix);
+  });
+
+  it('warns, with the trust command, when the marker is not trusted or changed since it was', () => {
+    for (const trust of ['no', 'changed'] as const) {
+      const { e, dir } = ws(good, {}, trust);
+      const check = byId(runChecks(e), 'workspace');
+      assert.equal(check.status, 'warn');
+      assert.match(check.detail, trust === 'no' ? /not trusted yet: its scratch dir, push and auto-merge are ignored/ : /changed since you trusted it/);
+      assert.ok((check.fix as string).includes(join(dir, MARKER)) && /workspace.ts" trust$/.test(check.fix as string));
+    }
   });
 
   it('warns when the workspace AGENTS.md does not exist yet', () => {

@@ -131,7 +131,7 @@ export function nestedScript(simple: Simple): Nested | null {
 }
 
 /** What a `wsl.exe` call runs inside Linux: its argv as a shell script the guard can scan like any other, or why that cannot be told. */
-export type Wsl = { script: string; cwd: boolean } | { ask: string };
+export type Wsl = { script: string; cwd: boolean; ask?: undefined } | { ask: string; script?: string; cwd?: boolean };
 
 const WSL_VALUE = new Set(['-d', '--distribution', '-u', '--user', '--shell-type', '--cd']);
 const WSL_PLAIN = new Set(['--system', '-l', '--list', '-v', '--verbose', '--status', '--version', '--help', '--online', '-o', '--running', '-q', '--quiet', '--all']);
@@ -140,8 +140,9 @@ const shellQuote = (word: string): string => `'${word.replaceAll("'", "'\\''")}'
 
 /**
  * `wsl.exe [-d d] [-u u] [--cd dir] --exec|-e|-- <program> <args>` runs program with exactly those arguments, so it is scanned like the same command
- * run directly (`--exec bash -lc 'x'` is `bash -c 'x'`). Fail closed: an option or form the guard does not know, a command without --exec (the Linux
- * shell would re-parse the line), or --exec with nothing after it asks. `--cd` makes relative paths unresolved. Management calls such as `wsl -l` pass.
+ * run directly (`--exec bash -lc 'x'` is `bash -c 'x'`). Only --exec and -e are exact argv. `--` and a bare command go through wsl's default Linux
+ * shell, which re-parses the line: those ask, and the words joined by spaces (unquoted) are scanned as well so a block still wins. An option the guard does
+ * not know, or --exec with nothing after it, asks. `--cd` makes relative paths unresolved. Management calls such as `wsl -l` pass.
  */
 export function wslCall(simple: Simple): Wsl | null {
   if (simple.name !== 'wsl') return null;
@@ -150,9 +151,13 @@ export function wslCall(simple: Simple): Wsl | null {
   let i = 0;
   for (; i < argv.length; i++) {
     const arg = argv[i] as string;
-    if (arg === '--exec' || arg === '-e' || arg === '--') {
+    if (arg === '--exec' || arg === '-e') {
       const command = argv.slice(i + 1);
       return command.length === 0 ? { ask: WSL_ASK } : { script: command.map(shellQuote).join(' '), cwd };
+    }
+    if (arg === '--' || !arg.startsWith('-')) {
+      const line = argv.slice(arg === '--' ? i + 1 : i).join(' ');
+      return { ask: WSL_ASK, script: line, cwd };
     }
     if (WSL_VALUE.has(arg)) {
       if (argv[i + 1] === undefined) return { ask: WSL_ASK };
