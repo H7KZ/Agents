@@ -4,7 +4,7 @@ import { evaluateDeploy } from './rules-deploy.ts';
 import { aliasDefinitions, applyGitEffects, evaluateGit, parseGitCall, type GitCall } from './rules-git.ts';
 import { evaluateIndirection, type Flow } from './rules-indirect.ts';
 import { tokenize, type Dialect } from './tokenize.ts';
-import { ask, cloneState, type Ctx, type Decision, type ScanState } from './types.ts';
+import { ask, cloneState, expandIn, type Ctx, type Decision, type ScanState } from './types.ts';
 
 export type { ScanState } from './types.ts';
 
@@ -23,7 +23,7 @@ const isPipe =(op: string): boolean => op.endsWith('|') && !op.endsWith('||');
 function changeDirectory(simple: Simple, state: ScanState, ctx: Ctx, mayFail: boolean): void {
   const target = simple.argv.find((arg) => !arg.startsWith('-') || arg === '-') ?? '~';
   if (target === '-') return;
-  const expanded = ctx.paths.expand(target, ctx.homeAssigned ? null : ctx.home);
+  const expanded = expandIn(ctx, target);
   if (expanded === null || expanded === '') return;
   const before = [state.cwd, ...state.alt];
   const after = before.map((dir) => ctx.paths.resolve(dir, expanded));

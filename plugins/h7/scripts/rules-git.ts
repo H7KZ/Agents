@@ -1,6 +1,6 @@
 import { parseArgs, type ParsedArgs, type ParseSpec } from './command.ts';
 import { tokenize } from './tokenize.ts';
-import { ask, block, type Ctx, type Decision, type ScanState } from './types.ts';
+import { ask, block, expandIn, type Ctx, type Decision, type ScanState } from './types.ts';
 
 const PROTECTED = new Set(['main', 'master', 'production', 'prod']);
 const FORCE_FLAGS = ['--force', '-f', '--force-with-lease', '--force-if-includes', '--mirror'];
@@ -84,7 +84,7 @@ function parseGlobals(argv: string[], cwd: string, ctx: Ctx): Globals {
   let gitDir: string | undefined;
   let workTree: string | undefined;
   const dirArg = (value: string): string | null => {
-    const expanded = ctx.paths.expand(value, ctx.homeAssigned ? null : ctx.home);
+    const expanded = expandIn(ctx, value);
     if (expanded === null) out.unresolved = true;
     return expanded;
   };
@@ -218,7 +218,7 @@ function hooksPathValues(call: GitCall): (string | undefined)[] {
 function hooksPath(call: GitCall, ctx: Ctx): Decision | null {
   let pending: Decision | null = null;
   for (const value of hooksPathValues(call)) {
-    const expanded = value === undefined || value === '' ? null : ctx.paths.expand(value, ctx.homeAssigned ? null : ctx.home);
+    const expanded = value === undefined || value === '' ? null : expandIn(ctx, value);
     if (expanded === null) {
       pending ??= ask('skip-git-hooks', `core.hooksPath is set to a value the guard cannot resolve ("${value ?? ''}"). ${HOOKS_ADVICE}`);
       continue;
@@ -427,7 +427,7 @@ function globToRegExp(glob: string): RegExp {
 /** Turns a user pathspec into a repository-root-relative one; null when it cannot match inside the repository. */
 function rootRelative(spec: string, root: string, call: GitCall, ctx: Ctx): string | null {
   if (spec.startsWith(':/')) return spec.slice(2).replace(/^\/+/, '');
-  const expanded = ctx.paths.expand(spec, ctx.homeAssigned ? null : ctx.home) ?? spec;
+  const expanded = expandIn(ctx, spec) ?? spec;
   return ctx.paths.relative(root, ctx.paths.resolve(call.cwd, expanded));
 }
 

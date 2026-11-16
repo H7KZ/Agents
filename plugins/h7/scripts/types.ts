@@ -56,3 +56,8 @@ export function block(rule: string, reason: string): Decision {
 export function ask(rule: string, reason: string): Decision {
   return { decision: 'ask', rule, reason };
 }
+
+/** Expands a leading ~ unless the command assigns HOME; variable references always stay unresolved (null). */
+export function expandIn(ctx: Ctx, word: string): string | null {
+  return ctx.paths.expand(word, ctx.homeAssigned === true ? null : ctx.home);
+}

@@ -1,7 +1,7 @@
 import type { Simple } from './command.ts';
 import { expandBraces } from './braces.ts';
 import { commandName } from './command.ts';
-import { ask, block, type Ctx, type Decision } from './types.ts';
+import { ask, block, expandIn, type Ctx, type Decision } from './types.ts';
 
 const DELETERS = new Set(['rm', 'remove-item', 'ri', 'del', 'erase', 'rd', 'rmdir']);
 const CMD_STYLE = new Set(['del', 'erase', 'rd', 'rmdir']);
@@ -119,7 +119,7 @@ const TOO_MANY = 'it has too many brace alternatives to check';
 const BROAD = 'the glob matches everything in the repository root';
 
 function checkWord(word: string, cwd: string, ctx: Ctx, root: string, home: string): string | null {
-  const expanded = ctx.paths.expand(word, ctx.homeAssigned ? null : ctx.home);
+  const expanded = expandIn(ctx, word);
   if (expanded === null) return UNRESOLVED;
   const glob = /[*?[]/.exec(expanded);
   if (!glob) {
@@ -208,7 +208,7 @@ export function evaluateFind(simple: Simple, cwd: string, ctx: Ctx): Decision | 
   let unresolved = false;
   let inside = false;
   for (const start of findStarts(simple.argv)) {
-    const expanded = ctx.paths.expand(start, ctx.homeAssigned ? null : ctx.home);
+    const expanded = expandIn(ctx, start);
     if (expanded === null) {
       unresolved = true;
       continue;
