@@ -196,3 +196,15 @@ describe('pathological inputs stay fast and never allow destructive commands', (
     );
   });
 });
+
+describe('the non-git path never spawns git', () => {
+  it('ordinary commands do not touch the runner', () => {
+    const forbidden: Runner = () => {
+      throw new Error('spawned');
+    };
+    for (const command of ['ls', 'ls -la | grep x', 'npm test && cat a.txt', 'rm file.txt', 'echo "git reset --hard"', 'node -v; cd sub && ls', 'find . -name x']) {
+      const result = guard(command, { runner: forbidden });
+      assert.equal(result.stdout.includes('internal error'), false, command);
+    }
+  });
+});
