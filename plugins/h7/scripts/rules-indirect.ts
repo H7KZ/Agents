@@ -22,7 +22,13 @@ function isPositional(word: string): boolean {
 }
 
 /** bun and deno subcommands that manage packages or tooling without running a program (publish and installs are judged by the deploy rules). */
-const NON_RUNNING_SUBCOMMANDS = new Set(['install', 'i', 'add', 'remove', 'rm', 'update', 'upgrade', 'publish', 'pm', 'link', 'unlink', 'outdated', 'audit', 'init', 'build', 'fmt', 'lint', 'check', 'doc', 'info', 'bench', 'compile', 'cache', 'help', 'version']);
+const NON_RUNNING_SUBCOMMANDS = new Set(['install', 'i', 'add', 'remove', 'rm', 'update', 'upgrade', 'publish', 'pm', 'link', 'unlink', 'outdated', 'audit', 'init', 'build', 'fmt', 'lint', 'check', 'doc', 'info', 'types', 'cache', 'help', 'version']);
+
+/** An argument of a package or tooling subcommand: a plain package name or local path, no URL or git source, no global install, script-allowing or eval flag. */
+function plainManagerWord(word: string): boolean {
+  if (/^(?:--allow-scripts.*|-g|--global|-e|--eval.*)$/.test(word)) return false;
+  return [word, word.slice(word.indexOf('=') + 1)].every((part) => !part.startsWith('//') && !part.startsWith('\\\\') && (!SCHEME.test(part) || /^[A-Za-z]:[\\/]/.test(part)));
+}
 
 /** A flag of the script itself; a value after = must be as plain as a path (no URL scheme, no // or \\ start). */
 function scriptFlag(word: string): boolean {
@@ -50,8 +56,8 @@ function placeable(name: string, argv: string[]): boolean {
     }
     if (runner && i === 0) {
       // run and test are runtime context, not the script: runtime flags are still checked until the real script positional.
-      if (word === 'run' || word === 'test') continue;
-      if (NON_RUNNING_SUBCOMMANDS.has(word)) return true;
+      if (word === 'run' || word === 'test' || word === 'bench' || word === 'compile') continue;
+      if (NON_RUNNING_SUBCOMMANDS.has(word)) return argv.slice(1).every(plainManagerWord);
       if (!/[./\\]/.test(word)) return false;
     }
     if (deno && /^(?:-A|--allow-[a-z-]+)$/.test(word)) continue;
