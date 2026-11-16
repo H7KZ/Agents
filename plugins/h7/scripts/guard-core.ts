@@ -65,7 +65,7 @@ const ALLOW: GuardResult = { code: 0, stdout: '', stderr: '' };
 
 interface HookInput {
   tool_name?: unknown;
-  tool_input?: { command?: unknown };
+  tool_input?: { command?: unknown; file_path?: unknown; notebook_path?: unknown };
   cwd?: unknown;
 }
 
@@ -79,6 +79,16 @@ function askResult(reason: string, note: string, mode: AskMode): GuardResult {
   const output = { hookSpecificOutput: { hookEventName: 'PreToolUse', permissionDecision: 'ask', permissionDecisionReason: reason } };
   return { code: 0, stdout: `${JSON.stringify(output)}
 `, stderr: note === '' ? '' : `${note.trim()}
+` };
+}
+
+const FILE_TOOLS = new Set(['Write', 'Edit', 'MultiEdit', 'NotebookEdit']);
+const CONFIG_MENTION = /\.h7["'\\/]*[\\/]["']*guard\.json/i;
+const CONFIG_REASON =
+  'h7 guard ask-mode config (~/.h7/guard.json) is owner-only: agents must not change their own guard policy. Ask the user to edit it.';
+
+function configBlock(note = ''): GuardResult {
+  return { code: 2, stdout: '', stderr: `h7 guard blocked [guard-config]: ${CONFIG_REASON}${note}
 ` };
 }
 
@@ -109,11 +119,24 @@ export function run(stdinText: string, env: Record<string, string | undefined>, 
       return { ...ALLOW, stderr: logError === null ? '' : `h7 guard: could not write guard log: ${logError}\n` };
     }
     const input = JSON.parse(stdinText) as HookInput;
+    if (typeof input.tool_name === 'string' && FILE_TOOLS.has(input.tool_name)) {
+      const target = input.tool_input?.file_path ?? input.tool_input?.notebook_path;
+      if (typeof target !== 'string') return ALLOW;
+      const config = join(home, '.h7', 'guard.json');
+      const norm = (p: string) => (io.platform === 'win32' ? p.replaceAll('\\', '/').toLowerCase() : p);
+      if (norm(target) !== norm(config) && !CONFIG_MENTION.test(target)) return ALLOW;
+      const logError = appendLog(home, entry('block', 'guard-config', target, cwd));
+      return configBlock(logError === null ? '' : ` (could not write guard log: ${logError})`);
+    }
     const text = input.tool_input?.command;
     if ((input.tool_name !== 'Bash' && input.tool_name !== 'PowerShell') || typeof text !== 'string' || text.trim() === '') {
       return ALLOW;
     }
     command = text;
+    if (CONFIG_MENTION.test(text)) {
+      const logError = appendLog(home, entry('block', 'guard-config', text, cwd));
+      return configBlock(logError === null ? '' : ` (could not write guard log: ${logError})`);
+    }
     cwd = typeof input.cwd === 'string' && input.cwd !== '' ? input.cwd : io.fallbackCwd;
     const platform = io.platform === 'win32' ? 'win32' : 'posix';
     const paths = makePaths(platform, io.realpath);
@@ -129,7 +152,7 @@ export function run(stdinText: string, env: Record<string, string | undefined>, 
   } catch (error) {
     const message = (error as Error).message;
     const logError = appendLog(home, { ...entry('error', 'internal-error', command, cwd), error: message });
-    return askResult(`h7 guard internal error: ${message}`, logError === null ? '' : `h7 guard: could not write guard log: ${logError}`, mode);
+    return askResult(`h7 guard internal error: ${message}`, logError === null ? '' : `h7 guard: could not write guard log: ${logError}`, mode === 'prompt' ? 'prompt' : 'deny');
   }
 }
 
@@ -137,7 +160,7 @@ export function defaultDeps(): Deps {
   return {
     platform: process.platform,
     runner: spawnRunner,
-    realpath: realpathSync,
+    realpath: realpathSync.native,
     homedir: homedir(),
     tmpdir: tmpdir(),
     fallbackCwd: process.cwd(),

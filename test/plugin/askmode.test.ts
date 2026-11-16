@@ -86,10 +86,11 @@ describe('run with ask modes', () => {
 
   it('applies the mode to internal errors too', () => {
     const home = tmpDir();
-    const ok = (over: Partial<GuardIo>) => run('{bad', { H7_HOME: home, H7_GUARD_ASK: 'allow' }, { ...baseDeps(home), ...over });
-    assert.equal(ok({}).code, 0);
-    assert.equal(ok({}).stdout, '');
+    const allowed = run('{bad', { H7_HOME: home, H7_GUARD_ASK: 'allow' }, baseDeps(home));
+    assert.equal(allowed.code, 2, 'internal errors never become a silent allow');
+    assert.match(allowed.stderr, /internal error/);
     assert.equal(run('{bad', { H7_HOME: home, H7_GUARD_ASK: 'deny' }, baseDeps(home)).code, 2);
+    assert.equal(JSON.parse(run('{bad', { H7_HOME: home }, { ...baseDeps(home), readConfig: none }).stdout).hookSpecificOutput.permissionDecision, 'ask');
   });
 
   it('reports a failed log write in allow and deny modes', () => {
@@ -106,6 +107,65 @@ describe('run with ask modes', () => {
     const home = tmpDir();
     writeTree(home, { '.h7/guard.json': '{"ask":"allow"}' });
     assert.deepEqual(guard('npm publish', { H7_HOME: home }), { code: 0, stdout: '', stderr: '' });
+  });
+});
+
+const CONFIG = ['.h7', 'guard.json'].join('/');
+
+function fileTool(tool: string, input: Record<string, unknown>, home: string) {
+  return run(JSON.stringify({ tool_name: tool, tool_input: input, cwd: '/repo' }), { H7_HOME: home }, baseDeps(home));
+}
+
+describe('guard config is owner-only', () => {
+  it('blocks shell commands that mention the config file, even in allow mode', () => {
+    const home = tmpDir();
+    for (const command of [
+      `echo '{"ask":"allow"}' > ~/${CONFIG}`,
+      `cp x "$HOME/${CONFIG}"`,
+      `Set-Content $env:USERPROFILE\\.h7\\guard.json 'x'`,
+      `rm ~/.h7/"guard.json"`,
+    ]) {
+      const result = guard(command, { H7_HOME: home, H7_GUARD_ASK: 'allow' });
+      assert.equal(result.code, 2, command);
+      assert.match(result.stderr, /^h7 guard blocked \[guard-config\]: .*owner-only/);
+    }
+  });
+
+  it('blocks Write, Edit, MultiEdit and NotebookEdit on the config path', () => {
+    const home = tmpDir();
+    const config = `${home}/${CONFIG}`;
+    for (const tool of ['Write', 'Edit', 'MultiEdit']) assert.equal(fileTool(tool, { file_path: config }, home).code, 2, tool);
+    assert.equal(fileTool('NotebookEdit', { notebook_path: config }, home).code, 2);
+    assert.equal(fileTool('Write', { file_path: `/elsewhere/${CONFIG}` }, home).code, 2);
+  });
+
+  it('matches the config path case-insensitively with either slash on win32 only', () => {
+    const win = run(
+      JSON.stringify({ tool_name: 'Write', tool_input: { file_path: 'c:/users/me/x/../.H7/GUARD.JSON' }, cwd: 'C:\\repo' }),
+      { H7_HOME: 'C:\\Users\\Me' },
+      { ...baseDeps('C:\\Users\\Me'), platform: 'win32' },
+    );
+    assert.equal(win.code, 2);
+    const exact = run(
+      JSON.stringify({ tool_name: 'Write', tool_input: { file_path: 'C:/Users/Me/.h7/guard.json' }, cwd: 'C:\\repo' }),
+      { H7_HOME: tmpDir() },
+      { ...baseDeps('C:\\Users\\Me'), platform: 'win32' },
+    );
+    assert.equal(exact.code, 2);
+  });
+
+  it('allows file tools on other paths and with no path', () => {
+    const home = tmpDir();
+    assert.deepEqual(fileTool('Write', { file_path: '/repo/src/a.ts' }, home), { code: 0, stdout: '', stderr: '' });
+    assert.deepEqual(fileTool('Write', { file_path: `${home}/.h7/other.json` }, home), { code: 0, stdout: '', stderr: '' });
+    assert.deepEqual(fileTool('Edit', {}, home), { code: 0, stdout: '', stderr: '' });
+  });
+
+  it('notes a failed log write on config blocks', () => {
+    const home = tmpDir();
+    writeTree(home, { '.h7': 'a file' });
+    assert.match(guard(`cat ~/${CONFIG}`, { H7_HOME: home }).stderr, /could not write guard log/);
+    assert.match(fileTool('Write', { file_path: `${home}/${CONFIG}` }, home).stderr, /could not write guard log/);
   });
 });
 

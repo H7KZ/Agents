@@ -201,7 +201,7 @@ describe('hooks.json', () => {
     const file = join(import.meta.dirname, '..', '..', 'plugins', 'h7', 'hooks', 'hooks.json');
     const config = JSON.parse(readFileSync(file, 'utf8'));
     const [entry] = config.hooks.PreToolUse;
-    assert.equal(entry.matcher, 'Bash|PowerShell');
+    assert.equal(entry.matcher, 'Bash|PowerShell|Write|Edit|MultiEdit|NotebookEdit');
     assert.deepEqual(entry.hooks, [{ type: 'command', command: 'node', args: ['${CLAUDE_PLUGIN_ROOT}/scripts/guard.ts'] }]);
   });
 });
