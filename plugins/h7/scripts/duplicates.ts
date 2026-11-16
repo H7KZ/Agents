@@ -7,7 +7,7 @@ export const OFFICIAL_PLUGIN = 'mattpocock-skills@claude-plugins-official';
 
 export function readJson(file: string): Record<string, unknown> | null {
   try {
-    const value: unknown = JSON.parse(readFileSync(file, 'utf8'));
+    const value: unknown = JSON.parse(readFileSync(file, 'utf8').replace(/^﻿/, ''));
     return value !== null && typeof value === 'object' && !Array.isArray(value) ? (value as Record<string, unknown>) : null;
   } catch {
     return null;
@@ -20,7 +20,7 @@ export function installedPlugins(home: string): string[] {
   return plugins !== null && typeof plugins === 'object' ? Object.keys(plugins) : [];
 }
 
-function mattpocockSkillNames(home: string): Set<string> {
+export function mattpocockSkillNames(home: string): Set<string> {
   const lock = readJson(join(home, '.agents', '.skill-lock.json'));
   const skills = lock?.skills;
   const names = new Set<string>();
@@ -49,4 +49,30 @@ export function duplicateSkillLinks(home: string): string[] {
     .filter((entry) => names.has(entry) && isLinkIntoAgentsSkills(join(dir, entry)))
     .sort()
     .map((entry) => join(dir, entry));
+}
+
+export const OFFICIAL_MARKETPLACE = 'claude-plugins-official';
+export const OFFICIAL_MARKETPLACE_SOURCE = 'anthropics/claude-plugins-official';
+
+export function knownMarketplaces(home: string): Record<string, unknown> | null {
+  return readJson(join(home, '.claude', 'plugins', 'known_marketplaces.json'));
+}
+
+export function lockPath(home: string): string {
+  return join(home, '.agents', '.skill-lock.json');
+}
+
+/** Removes the mattpocock/skills entries from ~/.agents/.skill-lock.json, keeping indentation and line endings. Returns how many were removed. */
+export function removeMattpocockLockEntries(home: string, write: (file: string, text: string) => void): number {
+  const file = lockPath(home);
+  const names = mattpocockSkillNames(home);
+  if (names.size === 0) return 0;
+  const original = readFileSync(file, 'utf8');
+  const lock = JSON.parse(original.replace(/^﻿/, '')) as { skills: Record<string, unknown> };
+  for (const name of names) delete lock.skills[name];
+  const indent = /^([ \t]+)"/m.exec(original)?.[1] ?? '  ';
+  const eol = original.includes('\r\n') ? '\r\n' : '\n';
+  const body = JSON.stringify(lock, null, indent).replaceAll('\n', eol);
+  write(file, (original.startsWith('﻿') ? '﻿' : '') + body + (/\n\s*$/.test(original) ? eol : ''));
+  return names.size;
 }

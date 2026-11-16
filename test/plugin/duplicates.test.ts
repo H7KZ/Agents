@@ -2,7 +2,7 @@ import assert from 'node:assert/strict';
 import { mkdirSync, symlinkSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { describe, it } from 'node:test';
-import { duplicateSkillLinks, installedPlugins, readJson } from '../../plugins/h7/scripts/duplicates.ts';
+import { duplicateSkillLinks, installedPlugins, knownMarketplaces, lockPath, mattpocockSkillNames, readJson, removeMattpocockLockEntries } from '../../plugins/h7/scripts/duplicates.ts';
 import { cleanupTmp, tmpDir, writeTree } from '../../scripts/test/helpers.ts';
 
 cleanupTmp();
@@ -67,5 +67,48 @@ describe('duplicateSkillLinks', () => {
     assert.deepEqual(duplicateSkillLinks(home), []);
     writeTree(home, { '.agents/.skill-lock.json': '{"skills":{"a":null,"b":5}}', '.claude/skills/b/x': '' });
     assert.deepEqual(duplicateSkillLinks(home), []);
+  });
+});
+
+describe('removeMattpocockLockEntries', () => {
+  const capture = () => {
+    const writes: { file: string; text: string }[] = [];
+    return { writes, write: (file: string, text: string) => void writes.push({ file, text }) };
+  };
+
+  it('removes only mattpocock/skills entries and keeps other keys, indentation, CRLF, BOM and the trailing newline', () => {
+    const home = tmpDir();
+    const original = '﻿{\r\n\t"version": 3,\r\n\t"skills": {\r\n\t\t"a": {"source": "mattpocock/skills"},\r\n\t\t"b": {"source": "me/skills"},\r\n\t\t"c": {"source": "mattpocock/skills"}\r\n\t}\r\n}\r\n';
+    writeTree(home, { '.agents/.skill-lock.json': original });
+    const out = capture();
+    assert.equal(removeMattpocockLockEntries(home, out.write), 2);
+    assert.equal(out.writes.length, 1);
+    const text = out.writes[0]?.text as string;
+    assert.equal(out.writes[0]?.file, lockPath(home));
+    assert.ok(text.startsWith('﻿{\r\n\t"version": 3'));
+    assert.ok(text.endsWith('}\r\n'));
+    assert.ok(!/[^\r]\n/.test(text));
+    assert.deepEqual(JSON.parse(text.slice(1)), { version: 3, skills: { b: { source: 'me/skills' } } });
+  });
+
+  it('defaults to two-space indentation without a trailing newline and writes nothing when there is nothing to remove', () => {
+    const home = tmpDir();
+    writeTree(home, { '.agents/.skill-lock.json': '{"skills":{"a":{"source":"mattpocock/skills"}}}' });
+    const out = capture();
+    assert.equal(removeMattpocockLockEntries(home, out.write), 1);
+    assert.equal(out.writes[0]?.text, '{\n  "skills": {}\n}');
+    const none = tmpDir();
+    assert.equal(removeMattpocockLockEntries(none, out.write), 0);
+    writeTree(none, { '.agents/.skill-lock.json': lock({ x: 'me/skills' }) });
+    assert.equal(removeMattpocockLockEntries(none, out.write), 0);
+    assert.equal(out.writes.length, 1);
+  });
+
+  it('mattpocockSkillNames and knownMarketplaces read the same files', () => {
+    const home = tmpDir();
+    writeTree(home, { '.agents/.skill-lock.json': lock({ a: 'mattpocock/skills', b: 'x/y' }), '.claude/plugins/known_marketplaces.json': '{"h7kz":{}}' });
+    assert.deepEqual([...mattpocockSkillNames(home)], ['a']);
+    assert.deepEqual(knownMarketplaces(home), { h7kz: {} });
+    assert.equal(knownMarketplaces(tmpDir()), null);
   });
 });

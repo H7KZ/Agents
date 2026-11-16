@@ -1,18 +1,18 @@
 import assert from 'node:assert/strict';
 import { spawnSync } from 'node:child_process';
-import { existsSync, mkdirSync, readFileSync, readdirSync, symlinkSync, writeFileSync } from 'node:fs';
+import { existsSync, lstatSync, mkdirSync, readFileSync, readdirSync, realpathSync, rmSync, symlinkSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { PassThrough } from 'node:stream';
 import { describe, it } from 'node:test';
 import fc from 'fast-check';
-import { askYesNo, configure, main, marketplaceEntry, mergeSettings, parseOptions, shellRun, type CommandResult, type Deps, type Options } from '../configure.ts';
+import { askYesNo, configure, main, marketplaceEntry, mergeSettings, parseOptions, quote, shellRun, writeFileAtomic, type AtomicOps, type CommandResult, type Deps, type Options } from '../configure.ts';
 import { SLOW, cleanupTmp, runNode, tmpDir, writeTree } from '../../scripts/test/helpers.ts';
 
 cleanupTmp();
 
 const repoRoot = join(import.meta.dirname, '..', '..');
 const OK: CommandResult = { status: 0, stdout: 'ok', stderr: '' };
-const opts = (over: Partial<Options> = {}): Options => ({ dryRun: false, yes: false, help: false, local: null, ...over });
+const opts = (over: Partial<Options> = {}): Options => ({ dryRun: false, yes: false, help: false, local: null, dev: null, ...over });
 
 interface Harness {
   deps: Deps;
@@ -49,12 +49,16 @@ describe('parseOptions', () => {
     assert.deepEqual(parseOptions(['--dry-run', '--yes', '--local', 'x', '--help']), opts({ dryRun: true, yes: true, help: true, local: 'x' }));
     assert.equal(parseOptions(['-y']).yes, true);
     assert.equal(parseOptions(['-h']).help, true);
+    assert.equal(parseOptions(['--dev', 'r']).dev, 'r');
   });
 
-  it('rejects unknown arguments and a missing --local value', () => {
+  it('rejects unknown arguments, a missing path and --local with --dev', () => {
     assert.throws(() => parseOptions(['--nope']), /unknown argument: --nope/);
-    assert.throws(() => parseOptions(['--local']), /needs a path/);
+    assert.throws(() => parseOptions(['--local']), /--local needs a path/);
     assert.throws(() => parseOptions(['--local', '--yes']), /needs a path/);
+    assert.throws(() => parseOptions(['--dev']), /--dev needs a path/);
+    assert.throws(() => parseOptions(['--dev', '--yes']), /needs a path/);
+    assert.throws(() => parseOptions(['--local', 'a', '--dev', 'b']), /cannot be combined/);
   });
 });
 
@@ -171,6 +175,7 @@ describe('configure: full run', () => {
     assert.equal(await configure(opts(), h.deps), 0);
     assert.deepEqual(installing(h), [
       'claude plugin marketplace add H7KZ/Agents',
+      'claude plugin marketplace add anthropics/claude-plugins-official',
       'claude plugin install h7@h7kz',
       'claude plugin install mattpocock-skills@claude-plugins-official',
     ]);
@@ -193,7 +198,7 @@ describe('configure: full run', () => {
   it('is idempotent: a second run on a configured machine runs nothing and changes nothing', async () => {
     const files = {
       '.claude/settings.json': JSON.stringify({ extraKnownMarketplaces: { h7kz: marketplaceEntry(null) } }),
-      '.claude/plugins/known_marketplaces.json': JSON.stringify({ h7kz: {} }),
+      '.claude/plugins/known_marketplaces.json': JSON.stringify({ h7kz: { source: { source: 'github', repo: 'H7KZ/Agents' } }, 'claude-plugins-official': {} }),
       '.claude/plugins/installed_plugins.json': JSON.stringify({ plugins: { 'h7@h7kz': [], 'mattpocock-skills@claude-plugins-official': [] } }),
       '.h7/.keep': '',
     };
@@ -202,7 +207,7 @@ describe('configure: full run', () => {
     assert.equal(await configure(opts(), h.deps), 0);
     assert.deepEqual(installing(h), []);
     assert.equal(readFileSync(settingsPath(h.home), 'utf8'), before);
-    assert.equal(existsSync(`${settingsPath(h.home)}.h7bak`), false);
+    assert.equal(readFileSync(`${settingsPath(h.home)}.h7bak`, 'utf8'), before);
     assert.ok(h.logs.some((l) => /already added/.test(l)));
     assert.ok(h.logs.some((l) => /already has h7kz/.test(l)));
     assert.ok(h.logs.some((l) => /no stale duplicates/.test(l)));
@@ -392,3 +397,345 @@ function spawnWrapper(command: string, args: string[]): { status: number | null;
   const result = spawnSync(command, args, { encoding: 'utf8', windowsHide: true });
   return { status: result.status, stdout: result.stdout };
 }
+
+describe('configure: official marketplace', () => {
+  it('adds claude-plugins-official before installing mattpocock-skills when it is unknown', async () => {
+    const h = harness();
+    assert.equal(await configure(opts(), h.deps), 0);
+    const cmds = installing(h);
+    const add = cmds.indexOf('claude plugin marketplace add anthropics/claude-plugins-official');
+    assert.ok(add >= 0 && add < cmds.indexOf('claude plugin install mattpocock-skills@claude-plugins-official'));
+  });
+
+  it('does not add it again when it is already known', async () => {
+    const h = harness({ files: { '.claude/plugins/known_marketplaces.json': JSON.stringify({ 'claude-plugins-official': {} }) } });
+    assert.equal(await configure(opts(), h.deps), 0);
+    assert.ok(!installing(h).some((c) => c.includes('anthropics/claude-plugins-official')));
+  });
+
+  it('stops with the command output when adding it fails, before installing', async () => {
+    const h = harness({ fail: ['claude plugin marketplace add anthropics/claude-plugins-official'] });
+    assert.equal(await configure(opts(), h.deps), 1);
+    assert.match(h.logs.at(-1) as string, /failed \(exit 1\): boom/);
+    assert.ok(!installing(h).some((c) => c.includes('install mattpocock')));
+  });
+});
+
+describe('configure: settings.json handling', () => {
+  const original = '{\n  "model": "x"\n}\n';
+
+  it('backs up the ORIGINAL settings before claude rewrites them, and merges afterwards with autoUpdate', async () => {
+    const h = harness({ files: { '.claude/settings.json': original } });
+    const file = settingsPath(h.home);
+    const inner = h.deps.run;
+    h.deps.run = (command, args) => {
+      const line = [command, ...args].join(' ');
+      if (line.startsWith('claude plugin marketplace add')) {
+        const now = JSON.parse(readFileSync(file, 'utf8'));
+        now.extraKnownMarketplaces = { ...now.extraKnownMarketplaces, h7kz: { source: { source: 'github', repo: 'H7KZ/Agents' } }, 'claude-plugins-official': { source: { source: 'github', repo: 'anthropics/claude-plugins-official' } } };
+        writeFileSync(file, JSON.stringify(now, null, 2));
+      }
+      return inner(command, args);
+    };
+    assert.equal(await configure(opts(), h.deps), 0);
+    assert.equal(readFileSync(`${file}.h7bak`, 'utf8'), original);
+    const merged = JSON.parse(readFileSync(file, 'utf8'));
+    assert.equal(merged.extraKnownMarketplaces.h7kz.autoUpdate, true);
+    assert.equal(merged.extraKnownMarketplaces['claude-plugins-official'].source.repo, 'anthropics/claude-plugins-official');
+    assert.equal(merged.model, 'x');
+  });
+
+  it('takes the backup before the first claude plugin command and never overwrites an existing backup', async () => {
+    const backupSeenByPluginCommands = async (files: Record<string, string>) => {
+      const h = harness({ files });
+      const backup = `${settingsPath(h.home)}.h7bak`;
+      const seen: string[] = [];
+      const inner = h.deps.run;
+      h.deps.run = (command, args) => {
+        if (args[0] === 'plugin') seen.push(existsSync(backup) ? readFileSync(backup, 'utf8') : 'none');
+        return inner(command, args);
+      };
+      assert.equal(await configure(opts(), h.deps), 0);
+      return seen;
+    };
+    const kept = await backupSeenByPluginCommands({ '.claude/settings.json': original, '.claude/settings.json.h7bak': 'older' });
+    assert.ok(kept.length > 0 && kept.every((b) => b === 'older'));
+    const fresh = await backupSeenByPluginCommands({ '.claude/settings.json': original });
+    assert.ok(fresh.length > 0 && fresh.every((b) => b === original));
+  });
+
+  it('dry run does not write the backup but says it would', async () => {
+    const h = harness({ files: { '.claude/settings.json': original } });
+    assert.equal(await configure(opts({ dryRun: true }), h.deps), 0);
+    assert.equal(existsSync(`${settingsPath(h.home)}.h7bak`), false);
+    assert.ok(h.logs.some((l) => l.startsWith('[dry-run] back up ')));
+  });
+
+  it('mergeSettings handles a UTF-8 BOM: parses through it and writes it back', () => {
+    const entry = marketplaceEntry(null);
+    const merged = mergeSettings('\uFEFF{\n  "a": 1\n}\n', entry);
+    assert.equal(merged.changed, true);
+    assert.ok(merged.text.startsWith('\uFEFF{'));
+    assert.equal(merged.text.indexOf('\uFEFF', 1), -1);
+    assert.deepEqual(JSON.parse(merged.text.slice(1)), { a: 1, extraKnownMarketplaces: { h7kz: entry } });
+    assert.deepEqual(mergeSettings(merged.text, entry), { text: merged.text, changed: false });
+    assert.ok(!mergeSettings('{}', entry).text.startsWith('\uFEFF'));
+    assert.ok(mergeSettings('\uFEFF', entry).text.startsWith('\uFEFF{'));
+    assert.throws(() => mergeSettings('\uFEFF{', entry), /not valid JSON/);
+  });
+
+  it('a BOM settings.json survives a full run', async () => {
+    const h = harness({ files: { '.claude/settings.json': '\uFEFF{"model":"x"}' } });
+    assert.equal(await configure(opts(), h.deps), 0);
+    const text = readFileSync(settingsPath(h.home), 'utf8');
+    assert.ok(text.startsWith('\uFEFF{'));
+    assert.equal(JSON.parse(text.slice(1)).model, 'x');
+  });
+
+  it('writeFileAtomic writes through a temp file and leaves none behind', () => {
+    const dir = tmpDir();
+    const file = join(dir, 'a.json');
+    writeFileAtomic(file, 'one');
+    writeFileAtomic(file, 'two');
+    assert.equal(readFileSync(file, 'utf8'), 'two');
+    assert.deepEqual(readdirSync(dir), ['a.json']);
+  });
+
+  it('writeFileAtomic keeps the original and removes the temp file when the rename fails', () => {
+    const dir = tmpDir();
+    const file = join(dir, 'a.json');
+    writeFileSync(file, 'original');
+    const removed: string[] = [];
+    const ops = {
+      write: writeFileSync,
+      rename: () => {
+        throw new Error('rename failed');
+      },
+      remove: (p: string) => removed.push(p),
+    } as unknown as AtomicOps;
+    assert.throws(() => writeFileAtomic(file, 'new', ops), /rename failed/);
+    assert.equal(readFileSync(file, 'utf8'), 'original');
+    assert.deepEqual(removed, [`${file}.h7tmp`]);
+    const failing = {
+      ...ops,
+      write: () => {
+        throw new Error('disk full');
+      },
+      remove: () => {
+        throw new Error('no such file');
+      },
+    } as unknown as AtomicOps;
+    assert.throws(() => writeFileAtomic(file, 'new', failing), /disk full/);
+  });
+});
+
+describe('configure: marketplace source mismatch', () => {
+  const known = (entry: object) => ({ '.claude/plugins/known_marketplaces.json': JSON.stringify({ h7kz: entry, 'claude-plugins-official': {} }) });
+  const warned = (h: Harness) => h.logs.filter((l) => /^warning: marketplace h7kz/.test(l));
+
+  it('warns and explains how to switch when --local meets a github marketplace, and does not add', async () => {
+    const h = harness({ files: known({ source: { source: 'github', repo: 'H7KZ/Agents' } }) });
+    assert.equal(await configure(opts({ local: repoRoot }), h.deps), 0);
+    assert.equal(warned(h).length, 1);
+    assert.match(warned(h)[0] as string, /claude plugin marketplace remove h7kz/);
+    assert.ok(!installing(h).some((c) => c.includes('marketplace add')));
+  });
+
+  it('warns when a github install meets a directory marketplace or another repo', async () => {
+    for (const entry of [{ source: { source: 'directory', path: repoRoot } }, { source: { source: 'github', repo: 'other/Agents' } }, {}]) {
+      const h = harness({ files: known(entry) });
+      assert.equal(await configure(opts(), h.deps), 0);
+      assert.equal(warned(h).length, 1, JSON.stringify(entry));
+    }
+  });
+
+  it('is silent when the directory source is the same, and warns for another directory', async () => {
+    const same = harness({ files: known({ source: { source: 'directory', path: repoRoot } }) });
+    await configure(opts({ local: repoRoot }), same.deps);
+    assert.equal(warned(same).length, 0);
+    assert.ok(same.logs.some((l) => /already added/.test(l)));
+    const other = harness({ files: known({ source: { source: 'directory', path: tmpDir() } }) });
+    await configure(opts({ local: repoRoot }), other.deps);
+    assert.equal(warned(other).length, 1);
+  });
+});
+
+describe('configure: --dev (live edits)', () => {
+  function devHarness(over: Parameters<typeof harness>[0] = {}): Harness & { repo: string; link: string; target: string } {
+    const repo = tmpDir();
+    writeTree(repo, { 'plugins/h7/.claude-plugin/plugin.json': '{"name":"h7"}', 'plugins/h7/skills/doctor/SKILL.md': 'x' });
+    const h = harness(over);
+    return { ...h, repo, link: join(h.home, '.claude', 'skills', 'h7'), target: join(repo, 'plugins', 'h7') };
+  }
+
+  it('links plugins/h7 into ~/.claude/skills/h7 so edits are live, adds no marketplace and writes no h7kz settings', async () => {
+    const h = devHarness({ files: { '.claude/settings.json': '{"model":"x"}' } });
+    assert.equal(await configure(opts({ dev: h.repo }), h.deps), 0);
+    assert.ok(lstatSync(h.link).isSymbolicLink());
+    assert.equal(realpathSync(h.link), realpathSync(h.target));
+    writeFileSync(join(h.target, 'skills', 'doctor', 'SKILL.md'), 'edited');
+    assert.equal(readFileSync(join(h.link, 'skills', 'doctor', 'SKILL.md'), 'utf8'), 'edited');
+    assert.ok(!h.commands.some((c) => c.includes('marketplace add H7KZ') || c.includes('install h7@h7kz')));
+    assert.equal(readFileSync(settingsPath(h.home), 'utf8'), '{"model":"x"}');
+    assert.ok(h.logs.some((l) => /dev mode: no marketplace/.test(l)));
+  });
+
+  it('still installs mattpocock-skills (with its marketplace) in dev mode', async () => {
+    const h = devHarness();
+    await configure(opts({ dev: h.repo }), h.deps);
+    assert.deepEqual(installing(h), ['claude plugin marketplace add anthropics/claude-plugins-official', 'claude plugin install mattpocock-skills@claude-plugins-official']);
+  });
+
+  it('uninstalls h7@h7kz first so h7 never loads twice', async () => {
+    const h = devHarness({ files: { '.claude/plugins/installed_plugins.json': JSON.stringify({ plugins: { 'h7@h7kz': [] } }) } });
+    assert.equal(await configure(opts({ dev: h.repo }), h.deps), 0);
+    assert.ok(installing(h).includes('claude plugin uninstall h7@h7kz'));
+    assert.ok(lstatSync(h.link).isSymbolicLink());
+  });
+
+  it('is idempotent when already linked to the same plugin directory', async () => {
+    const h = devHarness();
+    await configure(opts({ dev: h.repo }), h.deps);
+    h.logs.length = 0;
+    assert.equal(await configure(opts({ dev: h.repo }), h.deps), 0);
+    assert.ok(h.logs.some((l) => /already links to/.test(l)));
+  });
+
+  it('refuses to replace a link to somewhere else, a broken link or a real directory', async () => {
+    const elsewhere = devHarness();
+    const other = tmpDir();
+    writeTree(other, { '.claude-plugin/plugin.json': '{"name":"h7"}' });
+    mkdirSync(join(elsewhere.home, '.claude', 'skills'), { recursive: true });
+    symlinkSync(other, elsewhere.link, 'junction');
+    assert.equal(await configure(opts({ dev: elsewhere.repo }), elsewhere.deps), 1);
+    assert.match(elsewhere.logs.at(-1) as string, /already exists \(ok, points to .*\); remove it/);
+    assert.equal(realpathSync(elsewhere.link), realpathSync(other));
+
+    const broken = devHarness();
+    mkdirSync(join(broken.home, '.claude', 'skills'), { recursive: true });
+    const gone = tmpDir();
+    symlinkSync(gone, broken.link, 'junction');
+    rmSync(gone, { recursive: true });
+    assert.equal(await configure(opts({ dev: broken.repo }), broken.deps), 1);
+    assert.match(broken.logs.at(-1) as string, /already exists \(broken\); remove it/);
+
+    const real = devHarness({ files: { '.claude/skills/h7/keep.txt': 'mine' } });
+    assert.equal(await configure(opts({ dev: real.repo }), real.deps), 1);
+    assert.match(real.logs.at(-1) as string, /\(not-a-link\)/);
+    assert.equal(readFileSync(join(real.link, 'keep.txt'), 'utf8'), 'mine');
+  });
+
+  it('dry run changes nothing and prints the link it would make', async () => {
+    const h = devHarness({ files: { '.claude/plugins/installed_plugins.json': JSON.stringify({ plugins: { 'h7@h7kz': [] } }) } });
+    assert.equal(await configure(opts({ dev: h.repo, dryRun: true }), h.deps), 0);
+    assert.equal(lstatSync(h.link, { throwIfNoEntry: false }), undefined);
+    assert.ok(h.logs.some((l) => l.startsWith('[dry-run] link ') && l.includes('->')));
+    assert.deepEqual(installing(h), []);
+  });
+
+  it('fails clearly when the path has no plugins/h7', async () => {
+    const h = harness();
+    assert.equal(await configure(opts({ dev: tmpDir() }), h.deps), 1);
+    assert.match(h.logs.at(-1) as string, /--dev: no plugins\/h7\/\.claude-plugin\/plugin\.json/);
+    assert.deepEqual(h.commands, []);
+  });
+
+  it('a normal run on a machine with a dev link warns that h7 would load twice', async () => {
+    const h = devHarness();
+    await configure(opts({ dev: h.repo }), h.deps);
+    h.logs.length = 0;
+    assert.equal(await configure(opts(), h.deps), 0);
+    assert.ok(h.logs.some((l) => /^warning: .*h7 would load twice/.test(l)));
+    const clean = harness();
+    await configure(opts(), clean.deps);
+    assert.ok(!clean.logs.some((l) => /load twice/.test(l)));
+  });
+});
+
+describe('configure: dry-run output quoting', () => {
+  it('quotes commands and paths that contain spaces', async () => {
+    const repo = join(tmpDir(), 'dir with space', 'My Repo');
+    writeTree(repo, { '.claude-plugin/marketplace.json': '{}' });
+    const h = harness({ home: join(tmpDir(), 'home dir'), files: { '.claude/settings.json': '{}' } });
+    assert.equal(await configure(opts({ dryRun: true, local: repo }), h.deps), 0);
+    assert.ok(h.logs.some((l) => l === `[dry-run] run: claude plugin marketplace add "${repo}"`), h.logs.join('\n'));
+    assert.ok(h.logs.some((l) => l.startsWith('[dry-run] merge ') && l.includes(`into "${join(h.home, '.claude', 'settings.json')}"`)));
+    assert.ok(h.logs.some((l) => l.startsWith('[dry-run] create "') && l.includes('home dir')));
+    assert.ok(h.logs.some((l) => l.startsWith('[dry-run] back up "')));
+  });
+
+  it('quote leaves plain arguments alone', () => {
+    assert.equal(quote('H7KZ/Agents'), 'H7KZ/Agents');
+    assert.equal(quote('C:\\a\\b'), 'C:\\a\\b');
+    assert.equal(quote('a b'), '"a b"');
+  });
+});
+
+describe('configure: skill lock follow-up', () => {
+  function stale(): Harness {
+    const home = tmpDir();
+    writeTree(home, {
+      '.agents/.skill-lock.json': JSON.stringify({ skills: { tdd: { source: 'mattpocock/skills' }, mine: { source: 'me/skills' } } }, null, 2),
+    });
+    mkdirSync(join(home, '.agents', 'skills', 'tdd'), { recursive: true });
+    mkdirSync(join(home, '.claude', 'skills'), { recursive: true });
+    symlinkSync(join(home, '.agents', 'skills', 'tdd'), join(home, '.claude', 'skills', 'tdd'), 'junction');
+    return harness({ home });
+  }
+  const lock = (h: Harness) => join(h.home, '.agents', '.skill-lock.json');
+
+  it('notes that the lock remains and npx skills update can re-add the links', async () => {
+    const h = stale();
+    await configure(opts(), h.deps);
+    assert.ok(h.logs.some((l) => /skill-lock\.json still lists 1 mattpocock\/skills entries.*npx skills update/.test(l)));
+  });
+
+  it('removes the mattpocock entries (keeping a backup) only after a second confirmation', async () => {
+    const h = stale();
+    const before = readFileSync(lock(h), 'utf8');
+    const asked: string[] = [];
+    h.deps.confirm = async (q) => {
+      asked.push(q);
+      return true;
+    };
+    assert.equal(await configure(opts(), h.deps), 0);
+    assert.equal(asked.length, 2);
+    assert.match(asked[1] as string, /skill-lock\.json/);
+    assert.deepEqual(Object.keys(JSON.parse(readFileSync(lock(h), 'utf8')).skills), ['mine']);
+    assert.equal(readFileSync(`${lock(h)}.h7bak`, 'utf8'), before);
+    assert.ok(h.logs.some((l) => /removed 1 mattpocock\/skills entries/.test(l)));
+  });
+
+  it('keeps the lock when the second question is declined', async () => {
+    const h = stale();
+    const before = readFileSync(lock(h), 'utf8');
+    let n = 0;
+    h.deps.confirm = async () => ++n === 1;
+    assert.equal(await configure(opts(), h.deps), 0);
+    assert.equal(readFileSync(lock(h), 'utf8'), before);
+    assert.equal(existsSync(`${lock(h)}.h7bak`), false);
+  });
+
+  it('--yes removes the entries without asking, and dry run never touches the lock', async () => {
+    const yes = stale();
+    yes.deps.confirm = async () => assert.fail('must not ask');
+    await configure(opts({ yes: true }), yes.deps);
+    assert.deepEqual(Object.keys(JSON.parse(readFileSync(lock(yes), 'utf8')).skills), ['mine']);
+    const dry = stale();
+    const before = readFileSync(lock(dry), 'utf8');
+    await configure(opts({ yes: true, dryRun: true }), dry.deps);
+    assert.equal(readFileSync(lock(dry), 'utf8'), before);
+  });
+
+  it('does not ask about the lock when it lists no mattpocock entries', async () => {
+    const h = harness({ files: { '.claude/plugins/installed_plugins.json': JSON.stringify({ plugins: { 'mattpocock-skills@local-desktop-app-uploads': [] } }) } });
+    let n = 0;
+    h.deps.confirm = async () => {
+      n++;
+      return true;
+    };
+    await configure(opts(), h.deps);
+    assert.equal(n, 1);
+    assert.ok(!h.logs.some((l) => /skill-lock/.test(l)));
+  });
+});

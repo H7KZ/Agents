@@ -1,5 +1,5 @@
 import assert from 'node:assert/strict';
-import { mkdirSync, symlinkSync } from 'node:fs';
+import { mkdirSync, rmSync, symlinkSync } from 'node:fs';
 import { join } from 'node:path';
 import { describe, it } from 'node:test';
 import fc from 'fast-check';
@@ -66,6 +66,7 @@ describe('runChecks on a healthy machine', () => {
       ['claude', 'pass'],
       ['marketplace', 'pass'],
       ['auto-update', 'pass'],
+      ['h7-plugin', 'pass'],
       ['mattpocock', 'pass'],
       ['mattpocock-duplicates', 'pass'],
       ['h7-dir', 'pass'],
@@ -157,6 +158,90 @@ describe('runChecks failures', () => {
   });
 });
 
+describe('h7-plugin check (which mode is active)', () => {
+  const notInstalled = { ...healthyFiles, '.claude/plugins/installed_plugins.json': JSON.stringify({ plugins: { 'mattpocock-skills@claude-plugins-official': [] } }) };
+
+  function withLink(files: Record<string, string>, makeTarget = true): { e: DoctorEnv; link: string; target: string } {
+    const e = env({ files });
+    const target = tmpDir();
+    if (makeTarget) writeTree(target, { '.claude-plugin/plugin.json': '{"name":"h7"}' });
+    mkdirSync(join(e.home, '.claude', 'skills'), { recursive: true });
+    const link = join(e.home, '.claude', 'skills', 'h7');
+    symlinkSync(target, link, 'junction');
+    return { e, link, target };
+  }
+
+  it('passes in marketplace mode when h7@h7kz is installed and enabled', () => {
+    const check = byId(runChecks(env({ files: healthyFiles })), 'h7-plugin');
+    assert.equal(check.status, 'pass');
+    assert.match(check.detail, /marketplace mode/);
+    const explicit = env({ files: { ...healthyFiles, '.claude/settings.json': JSON.stringify({ enabledPlugins: { 'h7@h7kz': true } }) } });
+    assert.equal(byId(runChecks(explicit), 'h7-plugin').status, 'pass');
+  });
+
+  it('fails when h7 is installed nowhere, or installed but disabled', () => {
+    const none = byId(runChecks(env({ files: notInstalled })), 'h7-plugin');
+    assert.equal(none.status, 'fail');
+    assert.match(none.fix as string, /claude plugin install h7@h7kz/);
+    const off = byId(runChecks(env({ files: { ...healthyFiles, '.claude/settings.json': JSON.stringify({ enabledPlugins: { 'h7@h7kz': false } }) } })), 'h7-plugin');
+    assert.equal(off.status, 'fail');
+    assert.match(off.fix as string, /claude plugin enable h7@h7kz/);
+  });
+
+  it('reports dev mode from a link to a plugin directory, and does not need the marketplace', () => {
+    const { e, link, target } = withLink({ '.h7/.keep': '', '.claude/plugins/installed_plugins.json': JSON.stringify({ plugins: { 'mattpocock-skills@claude-plugins-official': [] } }) });
+    const checks = runChecks(e);
+    const plugin = byId(checks, 'h7-plugin');
+    assert.equal(plugin.status, 'pass');
+    assert.match(plugin.detail, /^dev mode: /);
+    assert.ok(plugin.detail.includes(link) && plugin.detail.includes('live edits'));
+    assert.ok(target.length > 0);
+    assert.equal(byId(checks, 'marketplace').status, 'pass');
+    assert.match(byId(checks, 'marketplace').detail, /dev mode/);
+    assert.equal(byId(checks, 'auto-update').status, 'pass');
+    assert.equal(summarize(checks).ok, true);
+  });
+
+  it('fails when both the marketplace install and the dev link are present (h7 would load twice)', () => {
+    const { e } = withLink(healthyFiles);
+    const check = byId(runChecks(e), 'h7-plugin');
+    assert.equal(check.status, 'fail');
+    assert.match(check.detail, /load twice/);
+    assert.match(check.fix as string, /claude plugin uninstall h7@h7kz/);
+  });
+
+  it('fails for a broken link, a link to something that is not h7, and a real directory', () => {
+    const broken = withLink(notInstalled);
+    rmSync(broken.target, { recursive: true });
+    assert.match(byId(runChecks(broken.e), 'h7-plugin').detail, /(broken)/);
+    const foreign = withLink(notInstalled, false);
+    assert.match(byId(runChecks(foreign.e), 'h7-plugin').detail, /(foreign)/);
+    const wrongName = withLink(notInstalled);
+    writeTree(wrongName.target, { '.claude-plugin/plugin.json': '{"name":"other"}' });
+    assert.match(byId(runChecks(wrongName.e), 'h7-plugin').detail, /(foreign)/);
+    const real = env({ files: { ...notInstalled, '.claude/skills/h7/x': '' } });
+    const check = byId(runChecks(real), 'h7-plugin');
+    assert.equal(check.status, 'fail');
+    assert.match(check.detail, /(not-a-link)/);
+    assert.ok((check.fix as string).length > 0);
+  });
+
+  it('says a local directory marketplace copies the plugin (edits are not live)', () => {
+    const files = { ...healthyFiles, '.claude/plugins/known_marketplaces.json': JSON.stringify({ h7kz: { source: { source: 'directory', path: '/x' } }, 'claude-plugins-official': {} }) };
+    assert.match(byId(runChecks(env({ files })), 'marketplace').detail, /NOT live/);
+  });
+});
+
+describe('mattpocock fix text', () => {
+  it('adds the official marketplace first when it is unknown, and only installs when it is known', () => {
+    const base = { ...healthyFiles, '.claude/plugins/installed_plugins.json': JSON.stringify({ plugins: { 'h7@h7kz': [] } }) };
+    const unknown = byId(runChecks(env({ files: base })), 'mattpocock').fix as string;
+    assert.match(unknown, /claude plugin marketplace add anthropics\/claude-plugins-official ; then claude plugin install mattpocock-skills@claude-plugins-official/);
+    const known = byId(runChecks(env({ files: { ...base, '.claude/plugins/known_marketplaces.json': JSON.stringify({ h7kz: { source: { source: 'github' } }, 'claude-plugins-official': {} }) } })), 'mattpocock').fix as string;
+    assert.equal(known, 'Run: claude plugin install mattpocock-skills@claude-plugins-official');
+  });
+});
+
 describe('summarize and main', () => {
   it('counts statuses', () => {
     const checks: Check[] = [
@@ -176,7 +261,7 @@ describe('summarize and main', () => {
     const parsed = JSON.parse(out[0] as string);
     assert.equal(parsed.ok, false);
     assert.ok(parsed.fail >= 1);
-    assert.equal(parsed.checks.length, 10);
+    assert.equal(parsed.checks.length, 11);
     assert.deepEqual(Object.keys(parsed).slice(0, 4), ['ok', 'pass', 'warn', 'fail']);
   });
 });

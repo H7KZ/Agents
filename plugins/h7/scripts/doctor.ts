@@ -2,7 +2,8 @@ import { spawnSync } from 'node:child_process';
 import { statSync } from 'node:fs';
 import { homedir } from 'node:os';
 import { join } from 'node:path';
-import { duplicateSkillLinks, installedPlugins, LEGACY_PLUGIN, OFFICIAL_PLUGIN, readJson } from './duplicates.ts';
+import { inspectDevLink } from './devlink.ts';
+import { duplicateSkillLinks, installedPlugins, knownMarketplaces, LEGACY_PLUGIN, OFFICIAL_MARKETPLACE, OFFICIAL_MARKETPLACE_SOURCE, OFFICIAL_PLUGIN, readJson } from './duplicates.ts';
 
 export type Status = 'pass' | 'warn' | 'fail';
 
@@ -58,9 +59,18 @@ function ghAuthCheck(env: DoctorEnv): Check {
     : { id: 'gh-auth', status: 'fail', detail: 'gh is not authenticated (or not installed)', fix: 'Run: gh auth login' };
 }
 
-function marketplaceChecks(env: DoctorEnv): Check[] {
-  const known = readJson(join(env.home, '.claude', 'plugins', 'known_marketplaces.json'));
+const H7_PLUGIN = 'h7@h7kz';
+const BOOTSTRAP_HINT = 'Run bootstrap/install.ps1 (Windows) or bootstrap/install.sh';
+
+function marketplaceChecks(env: DoctorEnv, dev: boolean): Check[] {
+  const known = knownMarketplaces(env.home);
   const entry = known?.h7kz as { source?: { source?: string }; autoUpdate?: unknown } | undefined;
+  if (dev) {
+    return [
+      { id: 'marketplace', status: 'pass', detail: 'dev mode: the h7kz marketplace is not needed' },
+      { id: 'auto-update', status: 'pass', detail: 'dev mode: edits in the linked working tree are live' },
+    ];
+  }
   if (entry === undefined) {
     return [
       { id: 'marketplace', status: 'fail', detail: 'marketplace h7kz is not known to Claude Code', fix: 'Run bootstrap/install.ps1 (Windows) or bootstrap/install.sh, or: claude plugin marketplace add H7KZ/Agents' },
@@ -72,11 +82,35 @@ function marketplaceChecks(env: DoctorEnv): Check[] {
   const local = entry.source?.source === 'directory';
   const auto = local || entry.autoUpdate === true || extra?.autoUpdate === true;
   return [
-    { id: 'marketplace', status: 'pass', detail: local ? 'h7kz is a local directory marketplace (live edits)' : 'h7kz marketplace is known' },
+    { id: 'marketplace', status: 'pass', detail: local ? 'h7kz is a local directory marketplace (the plugin is copied on install, so edits are NOT live; bootstrap --dev gives live edits)' : 'h7kz marketplace is known' },
     auto
       ? { id: 'auto-update', status: 'pass', detail: local ? 'not needed for a local directory marketplace' : 'autoUpdate is enabled' }
       : { id: 'auto-update', status: 'fail', detail: 'autoUpdate is not enabled for h7kz', fix: 'Set extraKnownMarketplaces.h7kz.autoUpdate to true in ~/.claude/settings.json (bootstrap does this).' },
   ];
+}
+
+function officialFix(env: DoctorEnv): string {
+  const install = `claude plugin install ${OFFICIAL_PLUGIN}`;
+  if (knownMarketplaces(env.home)?.[OFFICIAL_MARKETPLACE] !== undefined) return `Run: ${install}`;
+  return `Run these two commands in order: claude plugin marketplace add ${OFFICIAL_MARKETPLACE_SOURCE} ; then ${install}`;
+}
+
+/** Which way h7 is loaded: from the marketplace (h7@h7kz) or from a working tree linked at ~/.claude/skills/h7 (h7@skills-dir). Loading both runs every hook twice. */
+function h7PluginCheck(env: DoctorEnv): Check {
+  const link = inspectDevLink(env.home);
+  const installed = installedPlugins(env.home).includes(H7_PLUGIN);
+  const settings = readJson(join(env.home, '.claude', 'settings.json'));
+  const disabled = (settings?.enabledPlugins as Record<string, unknown> | undefined)?.[H7_PLUGIN] === false;
+  if (link.state === 'ok' && installed) {
+    return { id: 'h7-plugin', status: 'fail', detail: `h7 would load twice: ${H7_PLUGIN} is installed and ${link.path} links a working tree`, fix: `Keep one: claude plugin uninstall ${H7_PLUGIN} (dev mode), or remove the link ${link.path} (marketplace mode).` };
+  }
+  if (link.state === 'ok') return { id: 'h7-plugin', status: 'pass', detail: `dev mode: ${link.path} -> ${link.target} (live edits)` };
+  if (link.state !== 'absent') {
+    return { id: 'h7-plugin', status: 'fail', detail: `${link.path} exists but is not a link to an h7 plugin directory (${link.state})`, fix: `Remove it, then run bootstrap again (add --dev <repo> for live edits).` };
+  }
+  if (!installed) return { id: 'h7-plugin', status: 'fail', detail: `${H7_PLUGIN} is not installed and no dev link exists`, fix: `${BOOTSTRAP_HINT}, or: claude plugin install ${H7_PLUGIN}` };
+  if (disabled) return { id: 'h7-plugin', status: 'fail', detail: `${H7_PLUGIN} is installed but disabled`, fix: `Run: claude plugin enable ${H7_PLUGIN}` };
+  return { id: 'h7-plugin', status: 'pass', detail: `marketplace mode: ${H7_PLUGIN} is installed and enabled` };
 }
 
 function mattpocockChecks(env: DoctorEnv): Check[] {
@@ -87,7 +121,7 @@ function mattpocockChecks(env: DoctorEnv): Check[] {
   checks.push(
     plugins.includes(OFFICIAL_PLUGIN)
       ? { id: 'mattpocock', status: 'pass', detail: `${OFFICIAL_PLUGIN} is installed` }
-      : { id: 'mattpocock', status: 'fail', detail: `${OFFICIAL_PLUGIN} is not installed`, fix: `Run: claude plugin install ${OFFICIAL_PLUGIN}` },
+      : { id: 'mattpocock', status: 'fail', detail: `${OFFICIAL_PLUGIN} is not installed`, fix: officialFix(env) },
   );
   const dupes: string[] = [];
   const fixes: string[] = [];
@@ -124,7 +158,8 @@ export function runChecks(env: DoctorEnv): Check[] {
     tool(env, 'gh', 'gh', ['--version'], 'Install the GitHub CLI: https://cli.github.com'),
     ghAuthCheck(env),
     tool(env, 'claude', 'claude', ['--version'], 'Install Claude Code: https://code.claude.com/docs/en/setup'),
-    ...marketplaceChecks(env),
+    ...marketplaceChecks(env, inspectDevLink(env.home).state === 'ok'),
+    h7PluginCheck(env),
     ...mattpocockChecks(env),
     h7DirCheck(env),
   ];
