@@ -30,7 +30,8 @@ export function kindOf(name: string, command: string): Kind | null {
   for (const [kind, re] of NAME_ONLY) if (re.test(name)) return kind;
   const byName = KIND_RULES.find(([, re]) => re.test(name))?.[0] ?? null;
   const byCommand = KIND_RULES.find(([, re]) => re.test(command))?.[0] ?? null;
-  return (byName === null || byName === 'unit') && byCommand !== null && SPECIFIC.includes(byCommand) ? byCommand : (byName ?? byCommand);
+  const specific = SPECIFIC.find((k) => k === byCommand);
+  return byName === null || byName === 'unit' ? (specific ?? byName ?? byCommand) : byName;
 }
 
 /** Every kind a CI command touches. */
@@ -141,3 +142,4 @@ export function findTools(signals: string[], py: string): Found {
   }
   return { tools, commands };
 }
+
