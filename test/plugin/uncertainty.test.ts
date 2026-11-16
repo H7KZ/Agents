@@ -221,7 +221,7 @@ describe('parser uncertainty resolves to ask', () => {
       ['perl -E "say 1"', INDIRECT],
       ['ruby -e "puts 1"', INDIRECT],
       ['osascript -e "tell app 1"', INDIRECT],
-      ['python3 -c', null],
+      ['python3 -c', INDIRECT],
     ]);
   });
 

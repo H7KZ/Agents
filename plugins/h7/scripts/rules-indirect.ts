@@ -6,12 +6,49 @@ const RULE = 'indirect-exec';
 const INTERPRETER = /^(?:sh|bash|zsh|dash|ksh|ash|fish|python[\d.]*|pypy[\d.]*|py|node|nodejs|deno|bun|perl[\d.]*|ruby[\d.]*|php[\d.]*|pwsh|powershell|pwsh-preview|cmd|osascript|rscript|lua[\d.]*)$/;
 /** Interpreters whose inline or script arguments are not re-scanned as shell (shells, pwsh and cmd are). */
 const NON_SHELL = /^(?:python[\d.]*|pypy[\d.]*|py|node|nodejs|deno|bun|perl[\d.]*|ruby[\d.]*|php[\d.]*|osascript|Rscript|lua[\d.]*)$/i;
+const PYTHON = /^(?:python[\d.]*|pypy[\d.]*|py)$/i;
+const JS_RUNTIME = /^(?:node|nodejs|bun|deno)$/i;
+const PYTHON_FLAGS = new Set(['-u', '-B', '-O', '-OO', '-q', '-I', '-s']);
+const JS_FLAGS = new Set(['--test', '--watch', '--enable-source-maps', '--no-warnings', '--experimental-strip-types', '--experimental-test-coverage', '--inspect']);
+const SCHEME = /^[a-z][\w+.-]*:/i;
+const WINDOWS_PATH = /^[A-Za-z]:[\\/][\w./\\@+*-]*$/;
+const PLAIN_WORD = /^[\w./@:+*-]+$/;
+const SCRIPT_FLAG = /^--?[\w-]+(=[\w./:@+*-]*)?$/;
+
+/** A file path or module name: no leading dash, no URL scheme (data:, npm:, file:, http:...), no UNC or protocol-relative start. */
+function isPositional(word: string): boolean {
+  if (WINDOWS_PATH.test(word)) return true;
+  return !word.startsWith('-') && !word.startsWith('//') && PLAIN_WORD.test(word) && !SCHEME.test(word);
+}
+
 /**
- * Fail closed, no flag parsing and no denylist: an argument word that looks like code (shell or program punctuation, whitespace
- * inside one word, a data: or http(s): URL) means the interpreter may run a program the guard cannot read. Plain flags, paths and
- * module names (`-m pytest`, `--test`, `script.ts arg`) pass. Per-interpreter option grammars and token denylists were bypassed.
+ * Strict allowlist, no denylist and no per-interpreter flag grammar beyond a handful of known-safe flags: a non-shell
+ * interpreter call passes only when every word is an allowed flag, a plain path or module name, or (after the script or
+ * `-m module`) an argument of that script. Anything else could carry a program the guard cannot read, so it asks.
  */
-const CODE_LIKE = /[(){};`$=><|&'"\s]|^(?:data|https?):/i;
+function placeable(name: string, argv: string[]): boolean {
+  const python = PYTHON.test(name);
+  const js = JS_RUNTIME.test(name);
+  let script = false;
+  for (let i = 0; i < argv.length; i++) {
+    const word = argv[i] as string;
+    if (script) {
+      if (isPositional(word) || SCRIPT_FLAG.test(word)) continue;
+      return false;
+    }
+    if (python && word === '-m') {
+      if (!/^[\w.]+$/.test(argv[++i] ?? '')) return false;
+      script = true;
+    } else if (python && word === '-W') {
+      if (!/^[\w:.]+$/.test(argv[++i] ?? '')) return false;
+    } else if (!(python && PYTHON_FLAGS.has(word)) && !(js && (JS_FLAGS.has(word) || /^--test-reporter=\w+$/.test(word)))) {
+      if (!isPositional(word) || (js && (word === 'eval' || word === 'repl'))) return false;
+      script = true;
+    }
+  }
+  return true;
+}
+
 const EVALUATORS = new Set(['invoke-expression', 'iex']);
 const XARGS_VALUE_FLAGS = new Set(['-I', '-n', '-P', '-d', '-L', '-E', '-s', '-a']);
 /** Flags with no value, or with an optional value that can only be attached (-i, -l, -e). */
@@ -59,7 +96,7 @@ function xargsCommand(argv: string[]): XargsCommand {
 
 function interpreter(name: string, argv: string[], flow: Flow): Decision | null {
   if (flow.piped || flow.input || argv.includes('-s') || argv.includes('-')) return indirect(`Feeding ${name} from stdin`);
-  return NON_SHELL.test(name) && argv.some((word) => CODE_LIKE.test(word)) ? indirect(`${name} with an argument that looks like code`) : null;
+  return NON_SHELL.test(name) && !placeable(name, argv) ? indirect(`${name} with arguments that are not a plain script path or known-safe flags`) : null;
 }
 
 export function evaluateIndirection(simple: Simple, flow: Flow): Decision | null {
