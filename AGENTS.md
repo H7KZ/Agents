@@ -9,8 +9,9 @@ This repo is the `h7kz` Claude Code plugin marketplace with one plugin, `h7`: a 
 .claude-plugin/marketplace.json   marketplace "h7kz" -> plugins/h7
 plugins/h7/.claude-plugin/        plugin.json (name "h7", NO version)
 plugins/h7/hooks/hooks.json       PreToolUse safety guard (exec form: node + args)
-plugins/h7/scripts/*.ts           runtime code (guard, doctor, verify helpers)
+plugins/h7/scripts/*.ts           runtime code (guard, doctor, verify and review helpers)
 plugins/h7/skills/<name>/SKILL.md user-invoked skills (/h7:<name>)
+plugins/h7/agents/review-<lens>.md read-only reviewer subagents spawned by /h7:review
 test/plugin/                      node:test suites (*.test.ts fast, *.e2e.ts slow subprocess)
 bootstrap/                        install.ps1, install.sh, configure.ts (+ test/); --dev links plugins/h7 for live edits
 scripts/                          repo tooling: lint-skills.ts, check-manifests.ts (+ test/)
@@ -69,6 +70,10 @@ scripts/                          repo tooling: lint-skills.ts, check-manifests.
 | `/h7:verify` scopes the bar to the change: files and line ranges vs merge base, diff line and branch coverage from lcov, global-drop check | `test/plugin/verify-scope.test.ts`, `diff-coverage.test.ts`, `verify-skill.test.ts` |
 | Stop gate blocks only while `.h7/verify.json` is incomplete; fails open on internal errors, honors `stop_hook_active`, caps its own blocks; registered by work/ship frontmatter only, never in `hooks.json` | `test/plugin/verify-gate.test.ts`, `verify-state.test.ts`, `verify-skill.test.ts` |
 | Repo-configured textconv and attribute drivers never run in h7 diffs | `test/plugin/verify-scope.test.ts`, `git.test.ts` |
+| Review agents: one per lens, tools exactly `Read, Grep, Glob, Bash` (no Write/Edit/MultiEdit/NotebookEdit), name and description, spawned only by `/h7:review`, report format the findings parser accepts | `scripts/lint-skills.ts`, `test/plugin/review-agents.test.ts` |
+| A review finding survives only with a reproducing command and its output (unproven dropped, duplicates merged, ranked); the parent keeps only reproduced ids | `test/plugin/review-findings.test.ts`, `review-skill.test.ts` |
+| Lens picker covers every lens exactly once, selected or skipped with a reason | `test/plugin/review-lenses.test.ts` |
+| Reviewer model resolved from `~/.h7/models.json` (`H7_HOME` override), safe on missing or corrupt file, read only, never equal to the author model; codex/gemini detected on PATH without running | `test/plugin/models.test.ts` |
 | Skills never auto-trigger | `scripts/lint-skills.ts` |
 | AGENTS.md at most 150 lines | none yet |
 | Conventional Commits | none yet |
