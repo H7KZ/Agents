@@ -64,25 +64,53 @@ function ghApi(parsed: ParsedArgs): Decision | null {
   return ref !== null && PROTECTED_REF.test(ref[1] as string) ? guarded(`gh api ${method} on protected branch ref "${ref[1]}"`) : null;
 }
 
-function unwrapRunner(argv: string[]): Simple | null {
-  const parsed = parseArgs(argv, RUNNER_SPEC);
-  const command = parsed.positionals[0];
+interface OptionSpec {
+  valueShort: string;
+  valueLong: string[];
+}
+
+/** Index of the first non-option word (after skipping options and their values), or -1. */
+function positionalIndex(argv: string[], spec: OptionSpec): number {
+  for (let i = 0; i < argv.length; i++) {
+    const arg = argv[i] as string;
+    if (arg === '--') return i + 1 < argv.length ? i + 1 : -1;
+    if (arg.startsWith('--')) {
+      if (!arg.includes('=') && spec.valueLong.includes(arg)) i++;
+    } else if (arg.length > 1 && arg.startsWith('-')) {
+      if (arg.length === 2 && spec.valueShort.includes(arg[1] as string)) i++;
+    } else {
+      return i;
+    }
+  }
+  return -1;
+}
+
+function unwrapRunner(argv: string[], spec: OptionSpec): Simple | null {
+  const at = positionalIndex(argv, spec);
+  const command = argv[at];
   if (command === undefined) return null;
-  return { name: commandName(command), argv: argv.slice(argv.indexOf(command) + 1), env: {}, raw: command };
+  return { name: commandName(command), argv: argv.slice(at + 1), env: {}, raw: command };
+}
+
+/** Only a bare --dry-run (or =true, =client, =server) is a dry run; --dry-run=false runs for real. */
+function isDryRun(parsed: ParsedArgs): boolean {
+  if (!parsed.flags.includes('--dry-run')) return false;
+  const value = parsed.options.get('--dry-run');
+  return value === undefined || ['true', 'client', 'server'].includes(value.toLowerCase());
 }
 
 export function evaluateDeploy(simple: Simple): Decision | null {
   const { name, argv } = simple;
   if (RUNNERS.has(name)) {
-    const inner = unwrapRunner(argv);
+    const inner = unwrapRunner(argv, RUNNER_SPEC);
     return inner === null ? null : evaluateDeploy(inner);
   }
   const parsed = parseArgs(argv, PACKAGE_MANAGERS.has(name) ? NPM_SPEC : { valueShort: 'R', valueLong: ['--repo'] });
   const [first, second] = parsed.positionals;
   const flags = parsed.flags;
-  if (flags.includes('--dry-run')) return null;
+  if (isDryRun(parsed)) return null;
   if ((name === 'pnpm' || name === 'yarn' || name === 'npm') && (first === 'dlx' || first === 'exec')) {
-    const inner = unwrapRunner(argv.slice(argv.indexOf(first) + 1));
+    const inner = unwrapRunner(argv.slice(positionalIndex(argv, NPM_SPEC) + 1), RUNNER_SPEC);
     return inner === null ? null : evaluateDeploy(inner);
   }
   switch (name) {

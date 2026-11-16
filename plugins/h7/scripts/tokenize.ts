@@ -11,6 +11,8 @@ export interface Tokenized {
   inputs: boolean[];
   /** True when a PowerShell call operator (&) started the segment. */
   calls: boolean[];
+  /** True when parentheses are unbalanced or a case statement is present, so subshell structure is uncertain. */
+  ambiguous: boolean;
 }
 
 interface Heredoc {
@@ -32,6 +34,7 @@ export function tokenize(input: string, dialect: Dialect = 'sh'): Tokenized {
   const inputs: boolean[] = [];
   let opAccum = '';
   let parenDepth = 0;
+  let underflow = false;
   let segInput = false;
   let segCall = false;
   const calls: boolean[] = [];
@@ -321,7 +324,10 @@ export function tokenize(input: string, dialect: Dialect = 'sh'): Tokenized {
       endSegment();
       opAccum += c;
       if (c === '(') parenDepth++;
-      if (c === ')') parenDepth = Math.max(0, parenDepth - 1);
+      if (c === ')') {
+        underflow ||= parenDepth === 0;
+        parenDepth = Math.max(0, parenDepth - 1);
+      }
       i++;
     } else if (c === '&') {
       if (next === '>' || (current !== null && (input[i - 1] === '>' || input[i - 1] === '<'))) {
@@ -354,5 +360,6 @@ export function tokenize(input: string, dialect: Dialect = 'sh'): Tokenized {
     }
   }
   endSegment();
-  return { segments, nested, ops, depths, inputs, calls };
+  const ambiguous = underflow || parenDepth !== 0 || /(?:^|[\s;&|(])case\s/.test(input);
+  return { segments, nested, ops, depths, inputs, calls, ambiguous };
 }

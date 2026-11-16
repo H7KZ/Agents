@@ -37,11 +37,14 @@ function isPathParam(token: string): boolean {
   return (param.length >= 2 && 'path'.startsWith(param)) || (param !== '' && 'literalpath'.startsWith(param));
 }
 
-function applyShortFlag(token: string, flags: Flags): void {
+function applyShortFlag(token: string, flags: Flags, value: string): void {
   const body = token.slice(1);
   const lower = body.toLowerCase();
   if (body === '') return;
-  if (lower.length >= 2 && 'whatif'.startsWith(lower)) flags.whatIf = true;
+  if (lower.length >= 2 && 'whatif'.startsWith(lower)) {
+    // Only a bare -WhatIf or -WhatIf:$true is a dry run; -WhatIf:$false (or anything else) deletes for real.
+    if (value === '' || value.toLowerCase() === '$true') flags.whatIf = true;
+  }
   else if ('recurse'.startsWith(lower)) flags.recursive = true;
   else if ('force'.startsWith(lower)) flags.force = true;
   else {
@@ -88,7 +91,7 @@ function parseDeleteArgs(name: string, argv: string[]): Flags {
       } else if (SKIP_VALUE.test(token)) {
         if (colon === -1) i++;
       } else {
-        applyShortFlag(token, flags);
+        applyShortFlag(token, flags, colon === -1 ? '' : arg.slice(colon + 1));
       }
     } else {
       flags.targets.push(arg);
@@ -175,9 +178,18 @@ export function evaluateDelete(simple: Simple, cwd: string, ctx: Ctx, piped = fa
 }
 
 const FIND_ACTIONS = new Set(['-exec', '-execdir', '-ok', '-okdir']);
+/** Commands that run another command, so what -exec really does cannot be seen: treated like a delete. */
+const OPAQUE_EXEC = new Set([
+  'sh', 'bash', 'zsh', 'dash', 'ksh', 'ash', 'fish', 'pwsh', 'powershell', 'cmd', 'sudo', 'doas', 'env', 'xargs', 'busybox',
+  'nice', 'nohup', 'timeout', 'time', 'command', 'exec', 'eval',
+]);
 
 function findDeletes(argv: string[]): boolean {
-  return argv.some((arg, i) => arg === '-delete' || (FIND_ACTIONS.has(arg) && EXEC_DELETERS.has(commandName(argv[i + 1] ?? ''))));
+  return argv.some((arg, i) => {
+    if (arg === '-delete') return true;
+    const exec = FIND_ACTIONS.has(arg) ? commandName(argv[i + 1] ?? '') : '';
+    return EXEC_DELETERS.has(exec) || OPAQUE_EXEC.has(exec);
+  });
 }
 
 function findStarts(argv: string[]): string[] {

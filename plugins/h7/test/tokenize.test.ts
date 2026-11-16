@@ -284,3 +284,15 @@ describe('tokenize: structure metadata', () => {
     assert.deepEqual(tokenize('a | sh').inputs, [false, false]);
   });
 });
+
+describe('tokenize: ambiguity flag', () => {
+  it('is set for unbalanced parentheses and case statements only', () => {
+    assert.equal(tokenize('a; b').ambiguous, false);
+    assert.equal(tokenize('(a; (b))').ambiguous, false);
+    assert.equal(tokenize('(a').ambiguous, true);
+    assert.equal(tokenize('a)').ambiguous, true);
+    assert.equal(tokenize('case x in a) b;; esac').ambiguous, true);
+    assert.equal(tokenize('echo case').ambiguous, false);
+    assert.equal(tokenize('echo uppercase x').ambiguous, false);
+  });
+});

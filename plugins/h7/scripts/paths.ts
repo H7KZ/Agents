@@ -10,7 +10,8 @@ export interface Paths {
   isFsRoot(target: string): boolean;
   /** Forward-slash path of target relative to root; empty for root itself, null when outside. */
   relative(root: string, target: string): string | null;
-  expand(word: string, home: string, vars?: Record<string, string>): string | null;
+  /** vars maps names to literal values, or to null when the command itself reassigns them (then they stay unresolved). */
+  expand(word: string, home: string, vars?: Record<string, string | null>): string | null;
 }
 
 const NAMED_VARIABLE = /\$\{(?:env:)?([A-Za-z_][A-Za-z0-9_]*)\}|\$(?:env:)?([A-Za-z_][A-Za-z0-9_]*)|%([A-Za-z_][A-Za-z0-9_]*)%/g;
@@ -57,15 +58,19 @@ export function makePaths(platform: Platform, realpath: Realpath): Paths {
     return api.parse(resolved).root === resolved;
   };
 
-  const lookup = (name: string, vars: Record<string, string>): string | undefined => {
+  const lookup = (name: string, vars: Record<string, string | null>): string | null | undefined => {
     const key = Object.keys(vars).find((k) => fold(k) === fold(name));
     return key === undefined ? undefined : vars[key];
   };
 
-  const expand = (word: string, home: string, vars: Record<string, string> = {}): string | null => {
+  const expand = (word: string, home: string, vars: Record<string, string | null> = {}): string | null => {
     let s = word;
-    if (s === '~' || s.startsWith('~/') || s.startsWith('~\\')) s = home + s.slice(1);
-    s = s.replace(HOME_VARIABLE, () => home);
+    const homeKnown = lookup('HOME', vars) !== null && lookup('USERPROFILE', vars) !== null;
+    if (s === '~' || s.startsWith('~/') || s.startsWith('~\\')) {
+      if (!homeKnown) return null;
+      s = home + s.slice(1);
+    }
+    s = s.replace(HOME_VARIABLE, (match) => (homeKnown ? home : match));
     s = s.replace(NAMED_VARIABLE, (match, braced, bare, percent) => lookup(braced ?? bare ?? percent, vars) ?? match);
     if (/^~./.test(s) || /[$`]/.test(s)) return null;
     if (platform === 'win32' && /%[A-Za-z_][A-Za-z0-9_]*%/.test(s)) return null;

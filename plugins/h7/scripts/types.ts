@@ -12,7 +12,7 @@ export interface TempInfo {
   /** Canonical temporary directories; deletes strictly inside them are allowed. */
   dirs: string[];
   /** Temp-dir environment variables that are literally set (TMPDIR, TEMP, TMP). */
-  vars: Record<string, string>;
+  vars: Record<string, string | null>;
 }
 
 export interface Ctx {

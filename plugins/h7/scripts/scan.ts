@@ -14,6 +14,16 @@ const DIRECTORY_CHANGERS = new Set(['cd', 'chdir', 'pushd', 'set-location', 'sl'
 const ENV_SETTERS = new Set(['export', 'set', 'declare', 'typeset', 'readonly']);
 const LEAVERS = new Set(['exit', 'return']);
 
+const REASSIGNABLE = ['TMPDIR', 'TEMP', 'TMP', 'HOME', 'USERPROFILE'];
+
+/** Variables the command itself reassigns no longer hold their hook-time value, so they stay unresolved. */
+function withReassigned(ctx: Ctx, env: Record<string, string>): Ctx {
+  const names = Object.keys(env).map((name) => name.toUpperCase());
+  const hit = REASSIGNABLE.filter((name) => names.includes(name));
+  if (hit.length === 0) return ctx;
+  return { ...ctx, tmp: { ...ctx.tmp, vars: { ...ctx.tmp.vars, ...Object.fromEntries(hit.map((name) => [name, null])) } } };
+}
+
 const isPipe = (op: string): boolean => op.endsWith('|') && !op.endsWith('||');
 
 function changeDirectory(simple: Simple, state: ScanState, ctx: Ctx, mayFail: boolean): void {
@@ -79,10 +89,14 @@ export function scan(command: string, dialect: Dialect, ctx: Ctx, state: ScanSta
   const scanNested = (script: string, kind: Dialect): Decision[] => scan(script, kind, ctx, cloneState(state), depth + 1);
   const saved: { depth: number; state: ScanState }[] = [];
   let previousDepth = 0;
+  let afterCd = false;
   tokens.segments.forEach((words, index) => {
     const level = tokens.depths[index] as number;
     while (saved.length > 0 && level < (saved[saved.length - 1] as { depth: number }).depth) {
+      const before = [state.cwd, ...state.alt];
       Object.assign(state, (saved.pop() as { state: ScanState }).state);
+      // Unbalanced parentheses (for example case patterns) make the structure ambiguous: keep both sets.
+      if (tokens.ambiguous) state.alt = [...new Set([...state.alt, ...before])].filter((dir) => dir !== state.cwd).slice(0, MAX_CWDS - 1);
     }
     for (let entering = previousDepth + 1; entering <= level; entering++) saved.push({ depth: entering, state: cloneState(state) });
     previousDepth = level;
@@ -90,17 +104,21 @@ export function scan(command: string, dialect: Dialect, ctx: Ctx, state: ScanSta
     const simple = parseSimple(words);
     if (simple.name === '') {
       Object.assign(state.env, simple.env);
+      afterCd = false;
       return;
     }
+    const here = withReassigned(ctx, { ...state.env, ...simple.env });
     const flow: Flow = { piped: isPipe(op), input: tokens.inputs[index] as boolean, call: tokens.calls[index] as boolean, powershell: dialect === 'ps' };
-    found.push(...evaluateSimple(simple, state, ctx, flow, scanNested));
+    found.push(...evaluateSimple(simple, state, here, flow, scanNested));
     const inner = nestedScript(simple);
     if (inner) found.push(...scanNested(inner.script, inner.dialect));
-    if (LEAVERS.has(simple.name)) state.alt = [];
+    // Only `cd x || exit` at the top level proves the later commands run in the new directory.
+    if (LEAVERS.has(simple.name) && level === 0 && op === '||' && afterCd) state.alt = [];
     if (DIRECTORY_CHANGERS.has(simple.name)) {
       const next = tokens.ops[index + 1] ?? '';
-      changeDirectory(simple, state, ctx, op.includes('||') || next.includes('||'));
+      changeDirectory(simple, state, here, op.includes('||') || next.includes('||'));
     }
+    afterCd = DIRECTORY_CHANGERS.has(simple.name);
     if (ENV_SETTERS.has(simple.name)) Object.assign(state.env, assignmentsOf(simple));
   });
   for (const script of tokens.nested) found.push(...scanNested(script, dialect));

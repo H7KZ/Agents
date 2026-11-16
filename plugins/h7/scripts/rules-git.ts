@@ -26,6 +26,12 @@ const DESTRUCTIVE_SPECS = new Map<string, ParseSpec>([
   ['clean', { valueShort: 'e', valueLong: ['--exclude'], vocab: DESTRUCTIVE_VOCAB }],
   ['restore', { valueShort: 's', valueLong: ['--source', '--pathspec-from-file'], vocab: DESTRUCTIVE_VOCAB }],
 ]);
+const STASH_SPEC: ParseSpec = {
+  valueShort: 'm',
+  valueLong: ['--message', '--pathspec-from-file'],
+  vocab: ['--staged', '--patch', '--keep-index', '--include-untracked', '--all'],
+};
+const PARTIAL_STASH = ['-S', '--staged', '-p', '--patch', '-k', '--keep-index', '--pathspec-from-file'];
 const ADD_SPEC: ParseSpec = { valueLong: ['--pathspec-from-file'], vocab: ['--force', '--all', '--update', '--patch', '--add'] };
 const BLOCK_SECRETS: [RegExp, string][] = [
   [/^\.env$/i, '.env file'],
@@ -47,6 +53,8 @@ const ASK_SECRETS: [RegExp, string][] = [
   [/\.tfvars$/i, 'Terraform variables file'],
 ];
 const SECRET_EXEMPT = /(?:\.(?:example|sample|template)|\.pub)$/i;
+/** Hook directories that are accepted without asking when set inside the repository. */
+const HOOKS_ALLOWED = ['.husky', '.husky/_', '.githooks', '.git/hooks'];
 const HOOKS_ADVICE = 'Run the hooks and fix what they report. If a hook is wrong, ask the user before bypassing it.';
 
 export interface GitCall {
@@ -216,8 +224,12 @@ function hooksPath(call: GitCall, ctx: Ctx): Decision | null {
       continue;
     }
     const root = ctx.paths.resolve(call.cwd, ctx.git.repoRoot(call.cwd) ?? call.cwd);
-    if (!ctx.paths.isInside(root, ctx.paths.resolve(root, expanded))) {
+    const target = ctx.paths.resolve(root, expanded);
+    if (!ctx.paths.isInside(root, target)) {
       return block('skip-git-hooks', `core.hooksPath "${value}" points outside the repository and disables its git hooks. ${HOOKS_ADVICE}`);
+    }
+    if (!HOOKS_ALLOWED.some((dir) => ctx.paths.same(target, ctx.paths.resolve(root, dir)))) {
+      pending ??= ask('skip-git-hooks', `core.hooksPath "${value}" replaces the repository's git hooks with an unvetted directory. Only ${HOOKS_ALLOWED.join(', ')} are accepted without asking.`);
     }
   }
   return pending;
@@ -527,12 +539,21 @@ export function applyGitEffects(call: GitCall, ctx: Ctx): void {
       if (flags.includes('-a') || flags.includes('--all')) state.trackedClean = true;
       break;
     case 'stash': {
-      const action = parsed.positionals[0];
+      const stash = parseArgs(call.args, STASH_SPEC);
+      const action = stash.positionals[0];
       if (action === 'pop' || action === 'apply' || action === 'branch') {
         state.trackedClean = false;
       } else if (action === undefined || action === 'push' || action === 'save') {
-        state.trackedClean = true;
-        if (flags.some((f) => f === '-u' || f === '-a' || f === '--include-untracked' || f === '--all')) state.untrackedClean = true;
+        const partial =
+          stash.flags.some((f) => PARTIAL_STASH.includes(f)) || stash.rest.length > 0 || (action === 'push' && stash.positionals.length > 1);
+        if (partial) {
+          // A partial stash leaves some changes behind: whether the tree is clean is unknown, so ask git again.
+          state.trackedClean = undefined;
+          state.untrackedClean = undefined;
+        } else {
+          state.trackedClean = true;
+          if (stash.flags.some((f) => f === '-u' || f === '-a' || f === '--include-untracked' || f === '--all')) state.untrackedClean = true;
+        }
       }
       break;
     }
