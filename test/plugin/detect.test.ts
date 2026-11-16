@@ -390,7 +390,12 @@ describe('git detection', () => {
     assert.equal(remoteHost('ssh://git@host.example:22/a'), 'host.example');
     assert.equal(remoteHost('https://gitlab.com/a/b'), 'gitlab.com');
     assert.equal(remoteHost('nonsense'), null);
-    fc.assert(fc.property(fc.stringMatching(/^[a-z0-9]{1,8}$/), (secret) => !redactUrl(`https://${secret}@h.com/x`).includes(`${secret}@`)));
+    assert.equal(redactUrl('https://user:p@ss@github.com/a/b'), 'https://github.com/a/b');
+    assert.equal(redactUrl('https://tok@github.com'), 'https://github.com/');
+    assert.equal(redactUrl('https://github.com/a/b'), 'https://github.com/a/b');
+    assert.equal(redactUrl('https://u:p@@@host/x y'), 'https://host/x%20y');
+    assert.equal(redactUrl('https://bad host:p@ss@h/x'), 'https://h/x');
+    fc.assert(fc.property(fc.stringMatching(/^[a-z0-9]{1,8}$/), fc.stringMatching(/^[a-z0-9@:]{0,8}$/), (user, pass) => !redactUrl(`https://${user}:${pass}@h.com/x`).includes(user + ':')));
   });
 });
 

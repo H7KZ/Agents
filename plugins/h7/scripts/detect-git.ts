@@ -19,9 +19,17 @@ const SAMPLE = 30;
 const MIN_SAMPLE = 3;
 const THRESHOLD = 0.6;
 
-/** Never print credentials embedded in a remote URL. */
+/** Never print credentials embedded in a remote URL (user, password or token, even with an @ inside). */
 export function redactUrl(url: string): string {
-  return url.replace(/\/\/[^/@\s]*@/, '//');
+  try {
+    const parsed = new URL(url);
+    if (parsed.username === '' && parsed.password === '') return url;
+    parsed.username = '';
+    parsed.password = '';
+    return parsed.toString();
+  } catch {
+    return url.replace(/^([a-z][a-z0-9+.-]*:\/\/)[^/]*@/i, '$1');
+  }
 }
 
 export function remoteHost(url: string): string | null {
