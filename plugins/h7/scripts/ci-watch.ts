@@ -4,6 +4,7 @@ import { delimiter, isAbsolute, join, relative, resolve } from 'node:path';
 import { blocked, checkKey, countOpenThreads, decide, excerpt, parsePr, triage, type Check, type FailureLog, type Pr, type RerunRecord, type Triage, type Verdict } from './ci-verdict.ts';
 import { spawnRunner, type Runner } from './git.ts';
 import { ensureExclude, pathProblem, writeAtomic } from './setup-files.ts';
+import { placeOf, type FsIo, type Place } from './workspace.ts';
 
 export interface GhResult {
   status: number | null;
@@ -113,8 +114,8 @@ export function validRecords(value: unknown, sha: string): RerunRecord[] {
   return out;
 }
 
-/** State lives at <repo root>/.h7/ci-watch.json, written with setup's symlink-safe atomic writer. */
-export function makeStore(cwd: string, git: Runner): RerunStore {
+/** State lives in the repo's own .h7 directory, or under the workspace state directory in workspace mode; written with setup's symlink-safe atomic writer. */
+export function makeStore(cwd: string, git: Runner, fs?: FsIo, home?: string): RerunStore {
   const run = (args: string[], at: string): { status: number | null; stdout: string } => {
     try {
       return git(args, at);
@@ -126,6 +127,17 @@ export function makeStore(cwd: string, git: Runner): RerunStore {
     const result = run(['rev-parse', '--show-toplevel'], cwd);
     const root = result.stdout.trim();
     return result.status === 0 && root !== '' ? resolve(root) : null;
+  };
+  /** Where the state file goes for the repo containing cwd; null when that cannot be told (not a repo, untrustworthy workspace marker). */
+  const target = (): { root: string; place: Place; file: string } | null => {
+    const root = rootOf();
+    if (root === null) return null;
+    try {
+      const place = placeOf(root, fs, home);
+      return { root, place, file: join(place.state, 'ci-watch.json') };
+    } catch {
+      return null;
+    }
   };
   const ignored = (root: string): boolean => {
     if (run(['check-ignore', '-q', STATE_FILE], root).status === 0) return true;
@@ -149,25 +161,25 @@ export function makeStore(cwd: string, git: Runner): RerunStore {
   };
   return {
     load(sha) {
-      const root = rootOf();
-      if (root === null) return [];
+      const found = target();
+      if (found === null) return [];
       try {
-        if (pathProblem(STATE_FILE, root) !== null) return [];
-        return validRecords(parseJson(readFileSync(resolve(root, STATE_FILE), 'utf8')), sha);
+        if (pathProblem(found.file, found.place.contain) !== null) return [];
+        return validRecords(parseJson(readFileSync(found.file, 'utf8')), sha);
       } catch {
         return [];
       }
     },
     prepare() {
-      const root = rootOf();
-      return root !== null && ignored(root);
+      const found = target();
+      return found !== null && (found.place.workspace || ignored(found.root));
     },
     save(sha, records) {
-      const root = rootOf();
-      if (root === null) return false;
+      const found = target();
+      if (found === null) return false;
       try {
-        if (pathProblem(STATE_FILE, root) !== null) return false;
-        writeAtomic(resolve(root, STATE_FILE), `${JSON.stringify({ sha, reran: records.slice(-MAX_RECORDS) })}\n`, root);
+        if (pathProblem(found.file, found.place.contain) !== null) return false;
+        writeAtomic(found.file, `${JSON.stringify({ sha, reran: records.slice(-MAX_RECORDS) })}\n`, found.place.contain);
         return true;
       } catch {
         return false;

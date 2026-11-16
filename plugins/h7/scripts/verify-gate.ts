@@ -1,5 +1,5 @@
 import { readAll } from './guard-core.ts';
-import { incomplete, parseState, realStateIo, statePath, type StateIo } from './verify-state.ts';
+import { incomplete, parseState, realStateIo, stateFile, type StateIo } from './verify-state.ts';
 
 /** A state untouched for this long belongs to an abandoned run; it must not trap an unrelated session. */
 export const STALE_MS = 12 * 60 * 60 * 1000;
@@ -24,7 +24,7 @@ export function gate(input: string, io: StateIo = realStateIo, now: Date = new D
     const parsed = JSON.parse(input) as { stop_hook_active?: unknown; cwd?: unknown };
     if (parsed.stop_hook_active === true) return ALLOW;
     const cwd = typeof parsed.cwd === 'string' && parsed.cwd !== '' ? parsed.cwd : fallbackCwd;
-    const file = statePath(cwd);
+    const file = stateFile(cwd);
     const text = io.read(file);
     if (text === null) return ALLOW;
     const state = parseState(text);

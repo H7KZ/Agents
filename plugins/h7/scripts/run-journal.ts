@@ -1,9 +1,10 @@
 import { closeSync, fstatSync, mkdirSync, openSync, readFileSync, readSync, readdirSync, lstatSync, writeSync } from 'node:fs';
-import { dirname, join, resolve } from 'node:path';
+import { dirname, join, resolve, sep } from 'node:path';
 import { spawnRunner } from './git.ts';
 import { countProblem, startIsUnattended, isPhase, isRunId, makeEvent, makeRunId, parseJournal, progressOf, provenCount, serializeEvent, STALL_LIMIT, summarize, type Observed } from './run-journal-core.ts';
 import { ensureExclude, pathProblem, writeAtomic } from './setup-files.ts';
-import { incomplete, parseState, STATE_FILE } from './verify-state.ts';
+import { incomplete, parseState } from './verify-state.ts';
+import { placeOf, WorkspaceError, type FsIo, type Place } from './workspace.ts';
 
 export interface Stat {
   isSymbolicLink(): boolean;
@@ -84,6 +85,9 @@ export const realJournalIo: JournalIo = {
 };
 
 export interface Env {
+  /** Test seams for the workspace lookup; default to the real file system and home. */
+  fs?: FsIo;
+  home?: string;
   io: JournalIo;
   out(text: string): void;
   err(text: string): void;
@@ -150,58 +154,61 @@ function checkLinks(root: string, parts: string[], io: JournalIo): void {
 }
 
 /** The run `start` recorded in CURRENT; without it only a single run is unambiguous. Never guesses between several. */
-function defaultRun(root: string, io: JournalIo): string {
-  checkLinks(root, ['.h7', 'runs', CURRENT], io);
-  const current = (io.read(join(root, RUNS_DIR, CURRENT)) ?? '').trim();
+function defaultRun(place: Place, io: JournalIo): string {
+  checkLinks(place.contain, [...place.parts, 'runs', CURRENT], io);
+  const current = (io.read(join(place.state, 'runs', CURRENT)) ?? '').trim();
   if (current !== '') return current;
-  const ids = io.readdir(join(root, RUNS_DIR)).filter(isRunId);
+  const ids = io.readdir(join(place.state, 'runs')).filter(isRunId);
   const [only, ...others] = ids;
   if (only === undefined) throw new Failure('no run found; start one with: run-journal.ts start');
   if (others.length > 0) throw new Failure(`several runs and no ${CURRENT} file: pass --run <id> (${ids.sort().join(', ')})`);
   return only;
 }
 
-function pickRun(root: string, requested: string | undefined, io: JournalIo): string {
-  const id = requested ?? defaultRun(root, io);
+function pickRun(place: Place, requested: string | undefined, io: JournalIo): string {
+  const id = requested ?? defaultRun(place, io);
   if (!isRunId(id)) throw new Failure(`bad run id: ${id}`);
-  checkLinks(root, ['.h7', 'runs', id, JOURNAL], io);
-  if (io.lstat(join(root, RUNS_DIR, id))?.isDirectory() !== true) throw new Failure(`no such run: ${id}`);
+  checkLinks(place.contain, [...place.parts, 'runs', id, JOURNAL], io);
+  if (io.lstat(join(place.state, 'runs', id))?.isDirectory() !== true) throw new Failure(`no such run: ${id}`);
   return id;
 }
 
 /** Whether the run CURRENT points to was started unattended; false when there is none or anything about it is unreadable. */
-function currentIsUnattended(root: string, io: JournalIo): boolean {
-  const id = (io.read(join(root, RUNS_DIR, CURRENT)) ?? '').trim();
+function currentIsUnattended(place: Place, io: JournalIo): boolean {
+  const id = (io.read(join(place.state, 'runs', CURRENT)) ?? '').trim();
   if (!isRunId(id)) return false;
-  const first = (io.read(join(root, RUNS_DIR, id, JOURNAL)) ?? '').split('\n', 1)[0] ?? '';
+  const first = (io.read(join(place.state, 'runs', id, JOURNAL)) ?? '').split('\n', 1)[0] as string;
   return startIsUnattended(first);
 }
 
-function start(root: string, args: string[], env: Env): void {
+function start(place: Place, args: string[], env: Env): void {
   const requested = args.includes('--unattended');
   const { values } = flags(args.filter((arg) => arg !== '--unattended'), ['--task']);
   const { io } = env;
-  checkLinks(root, ['.h7', 'runs', CURRENT], io);
-  const exclude = io.excludePath(root);
-  if (exclude === null) throw new Failure('cannot locate the git exclude file (is git installed and is this a repository?); nothing written');
-  const current = join(root, RUNS_DIR, CURRENT);
-  const gitDir = dirname(dirname(exclude));
-  const problem = io.pathProblem(current, root) ?? io.pathProblem(exclude, gitDir);
+  checkLinks(place.contain, [...place.parts, 'runs', CURRENT], io);
+  // Workspace mode keeps state outside the repo: no exclude file is read or written.
+  const exclude = place.workspace ? null : io.excludePath(place.root);
+  if (exclude === null && !place.workspace) throw new Failure('cannot locate the git exclude file (is git installed and is this a repository?); nothing written');
+  const current = join(place.state, 'runs', CURRENT);
+  const problem = io.pathProblem(current, place.contain) ?? (exclude === null ? null : io.pathProblem(exclude, dirname(dirname(exclude))));
   if (problem !== null) throw new Failure(`${problem}; nothing written`);
-  const excluded = ensureExclude(io.read(exclude));
-  if (excluded.status !== 'unchanged') io.write(exclude, excluded.text, gitDir);
+  if (exclude !== null) {
+    const excluded = ensureExclude(io.read(exclude));
+    if (excluded.status !== 'unchanged') io.write(exclude, excluded.text, dirname(dirname(exclude)));
+  }
   // A new run never drops unattended from the run it replaces: an agent cannot weaken the guard by starting over.
-  const unattended = requested || currentIsUnattended(root, io);
+  const unattended = requested || currentIsUnattended(place, io);
   const base = makeRunId(io.now(), values['--task'] ?? '');
   let id = base;
-  for (let n = 2; io.lstat(join(root, RUNS_DIR, id)) !== null; n += 1) id = `${base}-${n}`;
-  io.mkdir(join(root, RUNS_DIR, id));
-  io.append(join(root, RUNS_DIR, id, JOURNAL), serializeEvent(makeEvent('note', { event: 'start', task: values['--task'] ?? '', ...(unattended ? { unattended: true } : {}) }, io.now())));
-  io.write(current, `${id}\n`, root);
-  env.out(JSON.stringify({ id, dir: `${RUNS_DIR}/${id}`, journal: `${RUNS_DIR}/${id}/${JOURNAL}`, exclude, excluded: true, unattended }));
+  for (let n = 2; io.lstat(join(place.state, 'runs', id)) !== null; n += 1) id = `${base}-${n}`;
+  io.mkdir(join(place.state, 'runs', id));
+  io.append(join(place.state, 'runs', id, JOURNAL), serializeEvent(makeEvent('note', { event: 'start', task: values['--task'] ?? '', ...(unattended ? { unattended: true } : {}) }, io.now())));
+  io.write(current, `${id}\n`, place.contain);
+  const dir = place.workspace ? join(place.state, 'runs', id).split(sep).join('/') : `${RUNS_DIR}/${id}`;
+  env.out(JSON.stringify({ id, dir, journal: `${dir}/${JOURNAL}`, exclude, excluded: exclude !== null, unattended }));
 }
 
-function append(root: string, args: string[], env: Env): void {
+function append(place: Place, args: string[], env: Env): void {
   const { values, rest } = flags(args, ['--run']);
   const [phase, json, ...extra] = rest;
   if (phase === undefined || json === undefined || extra.length > 0 || !isPhase(phase)) throw new Failure(USAGE);
@@ -214,23 +221,23 @@ function append(root: string, args: string[], env: Env): void {
   const record = typeof data === 'object' && data !== null && !Array.isArray(data) ? (data as Record<string, unknown>) : { value: data };
   const problem = countProblem(phase, record);
   if (problem !== null) throw new Failure(problem);
-  const id = pickRun(root, values['--run'], env.io);
-  env.io.append(join(root, RUNS_DIR, id, JOURNAL), serializeEvent(makeEvent(phase, record, env.io.now())));
+  const id = pickRun(place, values['--run'], env.io);
+  env.io.append(join(place.state, 'runs', id, JOURNAL), serializeEvent(makeEvent(phase, record, env.io.now())));
   env.out(JSON.stringify({ id, phase }));
 }
 
 /** What the verify record and the proven findings on disk say, when they exist. */
-function observe(root: string, io: JournalIo): Observed {
+function observe(place: Place, io: JournalIo): Observed {
   const unreadable: string[] = [];
   let failing: number | null = null;
   let unresolved: number | null = null;
-  const verify = io.read(join(root, STATE_FILE));
+  const verify = io.read(join(place.state, 'verify.json'));
   if (verify !== null) {
     const state = parseState(verify);
-    if (state === null) unreadable.push(STATE_FILE);
+    if (state === null) unreadable.push('.h7/verify.json');
     else failing = incomplete(state).length;
   }
-  const proven = io.read(join(root, PROVEN_FILE));
+  const proven = io.read(join(place.state, 'review', 'proven.json'));
   if (proven !== null) {
     const count = provenCount(proven);
     if (count === null) unreadable.push(PROVEN_FILE);
@@ -239,8 +246,8 @@ function observe(root: string, io: JournalIo): Observed {
   return { failing, unresolved, unreadable };
 }
 
-function load(root: string, id: string, io: JournalIo): ReturnType<typeof parseJournal> {
-  return parseJournal(io.read(join(root, RUNS_DIR, id, JOURNAL)) ?? '');
+function load(place: Place, id: string, io: JournalIo): ReturnType<typeof parseJournal> {
+  return parseJournal(io.read(join(place.state, 'runs', id, JOURNAL)) ?? '');
 }
 
 export function main(argv: string[], env: Env): number {
@@ -249,25 +256,26 @@ export function main(argv: string[], env: Env): number {
     if (cmd !== 'start' && cmd !== 'append' && cmd !== 'park' && cmd !== 'progress' && cmd !== 'show') throw new Failure(USAGE);
     const root = findRoot(env.cwd, env.io);
     if (root === null) throw new Failure('not inside a git repository');
-    if (cmd === 'start') start(root, args, env);
-    else if (cmd === 'append') append(root, args, env);
-    else if (cmd === 'park') append(root, ['park', ...args], env);
+    const place = placeOf(root, env.fs, env.home);
+    if (cmd === 'start') start(place, args, env);
+    else if (cmd === 'append') append(place, args, env);
+    else if (cmd === 'park') append(place, ['park', ...args], env);
     else if (cmd === 'progress') {
       const { values } = flags(args, ['--run', '--limit']);
-      const id = pickRun(root, values['--run'], env.io);
-      const { events, corrupt } = load(root, id, env.io);
-      const progress = progressOf(events, positive(values['--limit'], STALL_LIMIT, '--limit'), observe(root, env.io));
+      const id = pickRun(place, values['--run'], env.io);
+      const { events, corrupt } = load(place, id, env.io);
+      const progress = progressOf(events, positive(values['--limit'], STALL_LIMIT, '--limit'), observe(place, env.io));
       env.out(JSON.stringify({ id, corrupt, ...progress }));
       return progress.stop ? 1 : 0;
     } else {
       const { values } = flags(args, ['--run', '--tail']);
-      const id = pickRun(root, values['--run'], env.io);
-      const { events, corrupt } = load(root, id, env.io);
+      const id = pickRun(place, values['--run'], env.io);
+      const { events, corrupt } = load(place, id, env.io);
       env.out(JSON.stringify({ id, ...summarize(events, corrupt, positive(values['--tail'], 20, '--tail')) }));
     }
     return 0;
   } catch (error) {
-    env.err(error instanceof Failure ? error.message : `run-journal failed: ${(error as Error).message}`);
+    env.err(error instanceof Failure || error instanceof WorkspaceError ? error.message : `run-journal failed: ${(error as Error).message}`);
     return 2;
   }
 }

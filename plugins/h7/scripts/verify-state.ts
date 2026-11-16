@@ -1,5 +1,6 @@
 import { mkdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { dirname, join } from 'node:path';
+import { stateDir, WorkspaceError } from './workspace.ts';
 
 export const LAYERS = ['lint', 'types', 'unit', 'diff-coverage', 'mutation', 'edge-cases', 'property', 'e2e', 'bombadil', 'regression'] as const;
 export const STATUSES = ['pending', 'pass', 'fail', 'na'] as const;
@@ -23,6 +24,9 @@ export interface VerifyState {
 export const STATE_FILE = '.h7/verify.json';
 
 export const statePath = (root: string): string => join(root, STATE_FILE);
+
+/** The verify record for the repo containing cwd: <state dir>/verify.json (workspace mode keeps it outside the repo). */
+export const stateFile = (cwd: string): string => join(stateDir(cwd), 'verify.json');
 
 export function freshState(now: Date): VerifyState {
   const layers = Object.fromEntries(LAYERS.map((layer) => [layer, { status: 'pending' }])) as Record<Layer, LayerState>;
@@ -97,7 +101,13 @@ const USAGE = 'usage: verify-state.ts init | set <layer> <pass|fail|na|pending> 
 
 export function main(argv: string[], out: (text: string) => void, err: (text: string) => void, cwd: string, io: StateIo = realStateIo, now: () => Date = () => new Date()): number {
   const [cmd, layer, status, ...reason] = argv;
-  const file = statePath(cwd);
+  let file: string;
+  try {
+    file = stateFile(cwd);
+  } catch (error) {
+    err(error instanceof WorkspaceError ? error.message : `workspace failed: ${(error as Error).message}`);
+    return 2;
+  }
   const loaded = io.read(file);
   const current = loaded === null ? null : parseState(loaded);
   const save = (state: VerifyState): void => io.write(file, `${JSON.stringify(state, null, 2)}\n`);

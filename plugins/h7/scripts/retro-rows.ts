@@ -1,8 +1,9 @@
 import { lstatSync, readdirSync, readFileSync, type Stats } from 'node:fs';
-import { basename, join, relative, resolve } from 'node:path';
+import { basename, join, relative, resolve, sep } from 'node:path';
 import { findRoot } from './run-journal.ts';
 import { isRunId, parseJournal, redactText, roundScores } from './run-journal-core.ts';
 import { ensureExclude, MAX_LINES, pathProblem, writeAtomic } from './setup-files.ts';
+import { placeOf, WorkspaceError, type FsIo, type Place } from './workspace.ts';
 
 /** Where a check can live, strongest first: architecture, types, lint, test, prose last. */
 export const KINDS = ['architecture', 'types', 'lint', 'test', 'prose'] as const;
@@ -221,8 +222,8 @@ export function signalsOf(id: string, text: string): RunSignals {
 }
 
 /** Newest `limit` run journals under `<root>/.h7/runs`; symlinked runs and journals are skipped. */
-export function collectSignals(root: string, limit: number): RunSignals[] {
-  const dir = join(root, '.h7', 'runs');
+export function collectSignals(root: string, limit: number, state: string = join(root, '.h7')): RunSignals[] {
+  const dir = join(state, 'runs');
   const names = safeLstat(dir)?.isSymbolicLink() === false ? readdirSync(dir).filter(isRunId).sort() : [];
   const out: RunSignals[] = [];
   for (const id of names) {
@@ -242,22 +243,28 @@ const USAGE = [
 ].join('\n');
 
 export interface Env {
+  /** Test seams for the workspace lookup. */
+  fs?: FsIo;
+  home?: string;
   out(text: string): void;
   err(text: string): void;
   stdin(): string;
   cwd: string;
 }
 
-function save(root: string, rows: Row[]): void {
-  const file = resolve(root, STORE);
-  const problem = pathProblem(STORE, root);
+const storeFile = (place: Place): string => join(place.state, 'retro', 'rows.json');
+
+function save(place: Place, rows: Row[]): void {
+  const file = storeFile(place);
+  const problem = pathProblem(file, place.contain);
   if (problem !== null) throw new Failure(problem);
-  if (safeLstat(join(root, '.git'))?.isDirectory() === true) {
-    const exclude = join(root, '.git', 'info', 'exclude');
+  // Workspace mode keeps the rows outside the repo, so the repo's exclude file is left alone.
+  if (!place.workspace && safeLstat(join(place.root, '.git'))?.isDirectory() === true) {
+    const exclude = join(place.root, '.git', 'info', 'exclude');
     const result = ensureExclude(readIfPlain(exclude));
-    if (result.status !== 'unchanged') writeAtomic(exclude, result.text, root);
+    if (result.status !== 'unchanged') writeAtomic(exclude, result.text, place.root);
   }
-  writeAtomic(file, serializeStore(rows), root);
+  writeAtomic(file, serializeStore(rows), place.contain);
 }
 
 /** A `.md` file (any case) whose path inside the repo has no `.git` segment. */
@@ -292,11 +299,12 @@ export function main(argv: string[], env: Env): number {
     if (!['signals', 'propose', 'list', 'reject', 'apply'].includes(cmd as string)) throw new Failure(USAGE);
     const root = findRoot(env.cwd, { lstat: safeLstat });
     if (root === null) throw new Failure('not inside a git repository');
-    const rows = cmd === 'signals' ? [] : parseStore(readIfPlain(join(root, STORE)));
+    const place = placeOf(root, env.fs, env.home);
+    const rows = cmd === 'signals' ? [] : parseStore(readIfPlain(storeFile(place)));
     if (cmd === 'signals') {
       const limit = named['--limit'] === undefined ? 5 : Number(named['--limit']);
       if (!Number.isInteger(limit) || limit < 1) throw new Failure('--limit must be a positive integer');
-      env.out(JSON.stringify({ runs: collectSignals(root, limit) }));
+      env.out(JSON.stringify({ runs: collectSignals(root, limit, place.state) }));
     } else if (cmd === 'list') {
       env.out(JSON.stringify({ rows, pending: rows.filter((row) => row.status === 'pending').length }));
     } else if (cmd === 'propose') {
@@ -308,23 +316,23 @@ export function main(argv: string[], env: Env): number {
         throw new Failure('rows are not valid JSON');
       }
       const proposed = addRows(rows, parseCandidates(raw));
-      if (proposed.added.length > 0) save(root, proposed.rows);
+      if (proposed.added.length > 0) save(place, proposed.rows);
       env.out(JSON.stringify({ added: proposed.added, duplicates: proposed.duplicates }));
     } else if (cmd === 'reject') {
       const chosen = pick(rows, values);
       if (chosen.some((row) => row.status === 'applied')) throw new Failure('an applied row cannot be rejected');
       for (const row of chosen) row.status = 'rejected';
-      save(root, rows);
+      save(place, rows);
       env.out(JSON.stringify({ rejected: chosen.map((row) => row.id) }));
     } else {
       const chosen = pick(rows, values);
       const blocked = chosen.find((row) => row.status === 'rejected');
       if (blocked !== undefined) throw new Failure(`${blocked.id} was rejected`);
-      const file = named['--file'] ?? 'AGENTS.md';
-      const problem = pathProblem(file, root);
+      const file = named['--file'] ?? relative(place.contain, place.agents).split(sep).join('/');
+      const problem = pathProblem(file, place.contain);
       if (problem !== null) throw new Failure(problem);
-      const target = resolve(root, file);
-      if (!isMarkdownOutsideGit(root, target)) throw new Failure(`only markdown files outside .git can be edited: ${file}`);
+      const target = resolve(place.contain, file);
+      if (!isMarkdownOutsideGit(place.contain, target)) throw new Failure(`only markdown files outside .git can be edited: ${file}`);
       const existing = readIfPlain(target);
       if (existing === null) throw new Failure(`cannot read ${file}`);
       const limit = ['agents.md', 'claude.md'].includes(basename(file).toLowerCase()) ? MAX_LINES : null;
@@ -332,16 +340,16 @@ export function main(argv: string[], env: Env): number {
       const result = insertRows(existing, todo, flags.includes('--create'), limit);
       const write = flags.includes('--write') && (result.status === 'updated' || result.status === 'unchanged');
       if (write) {
-        if (result.status === 'updated') writeAtomic(target, result.text, root);
+        if (result.status === 'updated') writeAtomic(target, result.text, place.contain);
         for (const row of todo) row.status = 'applied';
-        save(root, rows);
+        save(place, rows);
       }
       env.out(JSON.stringify({ file, status: result.status, written: write, added: result.added, exists: result.exists, alreadyApplied: chosen.filter((row) => row.status === 'applied' && !todo.includes(row)).map((row) => row.id) }));
       return result.status === 'no-table' || result.status === 'oversize' ? 1 : 0;
     }
     return 0;
   } catch (error) {
-    env.err(error instanceof Failure ? error.message : `retro-rows failed: ${(error as Error).message}`);
+    env.err(error instanceof Failure || error instanceof WorkspaceError ? error.message : `retro-rows failed: ${(error as Error).message}`);
     return 2;
   }
 }

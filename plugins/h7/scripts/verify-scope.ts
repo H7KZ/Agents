@@ -1,4 +1,5 @@
 import { bulkRunner, type Runner } from './git.ts';
+import { settings, WorkspaceError } from './workspace.ts';
 
 export type FileKind = 'source' | 'test' | 'other';
 
@@ -80,21 +81,34 @@ export function unquote(token: string): string {
   return Buffer.concat(chunks).toString('utf8');
 }
 
-const CANDIDATES = ['origin/main', 'origin/master', 'main', 'master'];
+const CANDIDATES = ['origin/main', 'origin/master', 'main', 'master', 'origin/develop', 'develop'];
 
 function ok(run: Runner, cwd: string, args: string[]): string | null {
   const result = run(args, cwd);
   return result.status === 0 ? result.stdout : null;
 }
 
+const isCommit = (run: Runner, cwd: string, name: string): boolean => ok(run, cwd, ['rev-parse', '--verify', '--quiet', `${name}^{commit}`]) !== null;
+
+/** The default base: the workspace's configured branch (remote copy first), else the remote's HEAD, else the usual names. */
+export function defaultBase(run: Runner, cwd: string, configured: string | null): string | undefined {
+  if (configured !== null) {
+    const found = [`origin/${configured}`, configured].find((name) => isCommit(run, cwd, name));
+    if (found === undefined) throw new Error(`configured base ${configured} is not a commit; fix repos.<repo>.base in the workspace marker or pass --base <ref>`);
+    return found;
+  }
+  const head = (ok(run, cwd, ['symbolic-ref', '--quiet', 'refs/remotes/origin/HEAD']) ?? '').trim().replace(/^refs\/remotes\//, '');
+  return [head, ...CANDIDATES].find((name) => name !== '' && isCommit(run, cwd, name));
+}
+
 /** Files changed against `base` (committed, staged, unstaged and untracked), with changed line ranges. Throws when git cannot answer. */
-export function computeScope(run: Runner, startDir: string, base?: string): Scope {
+export function computeScope(run: Runner, startDir: string, base?: string, configured: string | null = null): Scope {
   if (base?.startsWith('-')) throw new Error(`base ${base} looks like an option; pass --base <ref>`);
   const cwd = (ok(run, startDir, ['rev-parse', '--show-toplevel']) ?? '').trim();
   if (cwd === '') throw new Error('not inside a git repository');
-  const resolved = base ?? CANDIDATES.find((name) => ok(run, cwd, ['rev-parse', '--verify', '--quiet', `${name}^{commit}`]) !== null);
-  if (resolved === undefined) throw new Error('no base branch found (tried origin/main, origin/master, main, master); pass --base <ref>');
-  if (ok(run, cwd, ['rev-parse', '--verify', '--quiet', `${resolved}^{commit}`]) === null) throw new Error(`base ${resolved} is not a commit; pass --base <ref>`);
+  const resolved = base ?? defaultBase(run, cwd, configured);
+  if (resolved === undefined) throw new Error('no base branch found (tried origin/HEAD, origin/main, origin/master, main, master, origin/develop, develop); pass --base <ref>');
+  if (!isCommit(run, cwd, resolved)) throw new Error(`base ${resolved} is not a commit; pass --base <ref>`);
   const found = ok(run, cwd, ['merge-base', 'HEAD', resolved]);
   const warnings = found === null ? [`no merge base between HEAD and ${resolved}; diffing against ${resolved} itself`] : [];
   const mergeBase = (found ?? resolved).trim();
@@ -118,10 +132,10 @@ export function main(argv: string[], out: (text: string) => void, err: (text: st
     return 2;
   }
   try {
-    out(JSON.stringify(computeScope(run, cwd, base)));
+    out(JSON.stringify(computeScope(run, cwd, base, base === undefined ? settings(cwd).base : null)));
     return 0;
   } catch (error) {
-    err((error as Error).message);
+    err(error instanceof WorkspaceError ? error.message : (error as Error).message);
     return 2;
   }
 }
