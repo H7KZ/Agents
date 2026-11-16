@@ -9,7 +9,8 @@ export interface RunResult {
   stdout: string;
 }
 
-export type Runner = (args: string[], cwd: string) => RunResult;
+/** `env` adds variables (GIT_INDEX_FILE, identity) on top of the hardened environment. */
+export type Runner = (args: string[], cwd: string, env?: Record<string, string>) => RunResult;
 
 export interface Git {
   /** Repository top level, or null when cwd is not inside a repository. Throws when git cannot answer. */
@@ -51,7 +52,7 @@ export function hardenedEnv(base: NodeJS.ProcessEnv): NodeJS.ProcessEnv {
 }
 
 export function makeSpawnRunner(executable: string | null, baseEnv: NodeJS.ProcessEnv = process.env, spawn: typeof spawnSync = spawnSync, limits: { timeout: number; maxBuffer: number } = { timeout: 5000, maxBuffer: 1024 * 1024 }): Runner {
-  return (args, cwd) => {
+  return (args, cwd, extraEnv) => {
     if (executable === null) return { status: null, stdout: '' };
     const result = spawn(executable, [...SAFE_ARGS, ...args], {
       cwd,
@@ -59,7 +60,7 @@ export function makeSpawnRunner(executable: string | null, baseEnv: NodeJS.Proce
       timeout: limits.timeout,
       maxBuffer: limits.maxBuffer,
       windowsHide: true,
-      env: hardenedEnv(baseEnv),
+      env: { ...hardenedEnv(baseEnv), ...extraEnv },
     });
     if ((result.error as NodeJS.ErrnoException | undefined)?.code === 'ETIMEDOUT') throw new Error(`git ${args[0]} timed out`);
     if ((result.error as NodeJS.ErrnoException | undefined)?.code === 'ENOBUFS') throw new Error(`git ${args[0]} output too large`);
@@ -71,6 +72,9 @@ export const spawnRunner: Runner = makeSpawnRunner(resolveGitPath(String(process
 
 /** For read-only bulk queries (change scope on large branches): long timeout, large output. */
 export const bulkRunner: Runner = makeSpawnRunner(resolveGitPath(String(process.env.PATH), isFile), process.env, spawnSync, { timeout: 120000, maxBuffer: 512 * 1024 * 1024 });
+
+/** For the recovery snapshot (git add -A over a whole worktree): generous but bounded. */
+export const snapshotRunner: Runner = makeSpawnRunner(resolveGitPath(String(process.env.PATH), isFile), process.env, spawnSync, { timeout: 60000, maxBuffer: 16 * 1024 * 1024 });
 
 function nulList(stdout: string): string[] {
   return stdout.split('\0').filter((entry) => entry !== '');

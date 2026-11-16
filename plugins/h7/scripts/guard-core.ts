@@ -1,12 +1,14 @@
 import { readFileSync, realpathSync } from 'node:fs';
 import { join } from 'node:path';
 import { homedir, tmpdir } from 'node:os';
-import { createGit, spawnRunner, type Runner } from './git.ts';
+import { createGit, snapshotRunner, spawnRunner, type Runner } from './git.ts';
 import { realDisk, type Disk } from './gitfiles.ts';
 import { appendDisabledOnce, appendLog, type LogEntry } from './log.ts';
 import { makePaths, type Realpath } from './paths.ts';
 import { pickDecision, scan } from './scan.ts';
-import { newState, type Ctx, type Decision } from './types.ts';
+import { takeSnapshot } from './snapshot.ts';
+import { newState, IGNORED_LOSS, type Ctx, type Decision } from './types.ts';
+import { isUnattended, realProbe, type Probe } from './unattended.ts';
 
 export interface Deps {
   /** Filesystem view; defaults to the real disk. */
@@ -20,6 +22,10 @@ export interface Deps {
   now: () => Date;
   /** Reads <home>/.h7/guard.json; returns null when absent. Defaults to the real file. */
   readConfig?: (home: string) => string | null;
+  /** Disk view for the unattended check; defaults to the real disk. */
+  probe?: Probe;
+  /** Runner for the recovery snapshot (longer timeout); defaults to `runner`. */
+  snapshotRunner?: Runner;
 }
 
 /** What an ASK decision becomes: a prompt (default), silently allowed, or turned into a block. */
@@ -89,6 +95,12 @@ function askResult(reason: string, note: string, mode: AskMode): GuardResult {
 ` };
 }
 
+/** An ask in an unattended run: nobody is there to answer, so it is refused at once and the agent parks it. */
+function unattendedResult(reason: string, note: string): GuardResult {
+  return { code: 2, stdout: '', stderr: `${reason} (unattended run: this needs a human; park it, record it in the journal with run-journal.ts park, continue with other work)${note}
+` };
+}
+
 const FILE_TOOLS = new Set(['Write', 'Edit', 'MultiEdit', 'NotebookEdit']);
 // Any mention of the config file name, or a .h7 path segment reached through another directory
 // (~/.h7, $HOME/.h7, $X/.h7, C:\Users\me\.h7). A repo-relative ".h7/..." or "./.h7/..." is not matched.
@@ -96,6 +108,7 @@ const CONFIG_MENTION = /guard["']*\.["']*json|[^\s"'=:.\\/][\\/]+["']*\.h7(?![\w
 // The config name anywhere in the target, plus Windows path forms the containment check cannot
 // canonicalise (\\?\, \\.\, UNC shares, NTFS streams after the drive letter): fail closed on those.
 const CONFIG_NAME = /guard\.json|^[\\/]{2}|^.{2,}:/i;
+const RUNS_PATH = /[\/].h7[\/]runs[\/]/;
 const CONFIG_REASON =
   'h7 guard state in ~/.h7 (ask-mode config, guard log) is owner-only: agents must not change their own guard policy. Ask the user to edit it.';
 
@@ -104,13 +117,31 @@ function configBlock(note = ''): GuardResult {
 ` };
 }
 
-function respond(decision: Decision, logError: string | null, mode: AskMode): GuardResult {
+function respond(decision: Decision, logError: string | null, mode: AskMode, unattended: () => boolean): GuardResult {
   const note = logError === null ? '' : ` (could not write guard log: ${logError})`;
   if (decision.decision === 'block') {
     return { code: 2, stdout: '', stderr: `h7 guard blocked [${decision.rule}]: ${decision.reason}${note}
 ` };
   }
-  return askResult(`h7 guard [${decision.rule}]: ${decision.reason}`, note, mode);
+  const reason = `h7 guard [${decision.rule}]: ${decision.reason}`;
+  // Stricter only: an unattended run turns a prompt into a refusal; allow, deny and bypass-derived allow are never touched.
+  return mode === 'prompt' && unattended() ? unattendedResult(reason, note) : askResult(reason, note, mode);
+}
+
+const DIRTY_RULE = 'destructive-git-dirty';
+
+/**
+ * A recovery snapshot when every block in the scan is a dirty-tree destructive git command whose loss a snapshot can hold. Null (keep the
+ * block) when anything else blocks, ignored files are at stake, the repository cannot be resolved, or any snapshot step fails.
+ */
+function snapshotFor(found: Decision[], command: string, cwd: string, ctx: Ctx, io: Deps): { ref: string } | null {
+  const blocks = found.filter((d) => d.decision === 'block');
+  if (blocks.length === 0 || blocks.some((d) => d.rule !== DIRTY_RULE || d.reason.includes(IGNORED_LOSS))) return null;
+  const root = ctx.git.repoRoot(cwd);
+  /* node:coverage ignore next */
+  if (root === null) return null; // the dirty rule only fires inside a repository
+  const result = takeSnapshot(root, command, { runner: io.snapshotRunner ?? io.runner, now: io.now });
+  return result.ok ? { ref: result.ref } : null;
 }
 
 export function run(stdinText: string, env: Record<string, string | undefined>, io: Deps): GuardResult {
@@ -126,6 +157,8 @@ export function run(stdinText: string, env: Record<string, string | undefined>, 
   let mode = configured;
   let cwd = io.fallbackCwd;
   let command = '';
+  const probe = io.probe ?? realProbe;
+  const unattended = (): boolean => isUnattended(env, cwd, probe);
   try {
     if (env.H7_GUARD === 'off') {
       const logError = appendDisabledOnce(home, entry('disabled', 'h7-guard-off', '', cwd));
@@ -139,7 +172,13 @@ export function run(stdinText: string, env: Record<string, string | undefined>, 
       const paths = makePaths(io.platform === 'win32' ? 'win32' : 'posix', io.realpath);
       const base = typeof input.cwd === 'string' && input.cwd !== '' ? input.cwd : io.fallbackCwd;
       const dir = paths.resolve(paths.resolve(base, home), '.h7');
-      if (!paths.isInside(dir, paths.resolve(base, target)) && !CONFIG_NAME.test(target)) return ALLOW;
+      const resolved = paths.resolve(base, target);
+      if (!paths.isInside(dir, resolved) && !CONFIG_NAME.test(target)) {
+        if (!RUNS_PATH.test(resolved) || !isUnattended(env, base, probe)) return ALLOW;
+        const logError = appendLog(home, entry('block', 'unattended-journal', target, base));
+        return { code: 2, stdout: '', stderr: `h7 guard blocked [unattended-journal]: the run journal of an unattended run is written only by run-journal.ts${logError === null ? '' : ` (could not write guard log: ${logError})`}
+` };
+      }
       const logError = appendLog(home, entry('block', 'guard-config', target, cwd));
       return configBlock(logError === null ? '' : ` (could not write guard log: ${logError})`);
     }
@@ -161,13 +200,28 @@ export function run(stdinText: string, env: Record<string, string | undefined>, 
     // A temp dir that contains the working directory or the home directory must not whitelist them.
     const dirs = candidates.filter((dir) => !paths.isInside(dir, cwd) && !paths.isInside(dir, paths.resolve(cwd, home)));
     const ctx: Ctx = { cwd, home, paths, git: createGit(io.runner, disk), disk, taint: { home: false }, tmp: { dirs } };
-    const decision = pickDecision(scan(command, input.tool_name === 'PowerShell' ? 'ps' : 'sh', ctx, newState(cwd)));
+    const found = scan(command, input.tool_name === 'PowerShell' ? 'ps' : 'sh', ctx, newState(cwd));
+    const snapshot = snapshotFor(found, command, cwd, ctx, io);
+    // The dirty-tree block is dropped when it was snapshotted, and when a stronger unrelated block names the real reason.
+    const otherBlock = found.some((d) => d.decision === 'block' && d.rule !== DIRTY_RULE);
+    const decision = pickDecision(snapshot === null && !otherBlock ? found : found.filter((d) => d.rule !== DIRTY_RULE));
+    if (snapshot !== null) {
+      const logError = appendLog(home, { ...entry('allow', 'destructive-git-snapshot', command, cwd), ref: snapshot.ref });
+      const note = `h7 guard: saved a recovery snapshot as ${snapshot.ref} before this destructive git command; undo with: git restore --source=${snapshot.ref} --worktree -- .${logError === null ? '' : ` (could not write guard log: ${logError})`}`;
+      if (decision === null) return { ...ALLOW, stderr: `${note}
+` };
+      const rest = respond(decision, appendLog(home, entry(decision.decision, decision.rule, command, cwd)), mode, unattended);
+      return { ...rest, stderr: `${note}
+${rest.stderr}` };
+    }
     if (decision === null) return ALLOW;
-    return respond(decision, appendLog(home, entry(decision.decision, decision.rule, command, cwd)), mode);
+    return respond(decision, appendLog(home, entry(decision.decision, decision.rule, command, cwd)), mode, unattended);
   } catch (error) {
     const message = (error as Error).message;
     const logError = appendLog(home, { ...entry('error', 'internal-error', command, cwd), error: message });
-    return askResult(`h7 guard internal error: ${message}`, logError === null ? '' : `h7 guard: could not write guard log: ${logError}`, configured === 'prompt' ? 'prompt' : 'deny');
+    const note = logError === null ? '' : `h7 guard: could not write guard log: ${logError}`;
+    if (configured === 'prompt' && unattended()) return unattendedResult(`h7 guard internal error: ${message}`, note === '' ? '' : ` (${note})`);
+    return askResult(`h7 guard internal error: ${message}`, note, configured === 'prompt' ? 'prompt' : 'deny');
   }
 }
 
@@ -175,6 +229,7 @@ export function defaultDeps(): Deps {
   return {
     platform: process.platform,
     runner: spawnRunner,
+    snapshotRunner,
     realpath: realpathSync.native,
     homedir: homedir(),
     tmpdir: tmpdir(),

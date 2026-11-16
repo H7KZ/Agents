@@ -63,3 +63,6 @@ export function ask(rule: string, reason: string): Decision {
 export function expandIn(ctx: Ctx, word: string): string | null {
   return ctx.paths.expand(word, ctx.taint.home ? null : ctx.home);
 }
+
+/** Marks a destructive-git-dirty reason whose loss includes ignored files: a snapshot cannot hold those, so the block stays. */
+export const IGNORED_LOSS = ' (includes ignored files, which no snapshot can hold)';

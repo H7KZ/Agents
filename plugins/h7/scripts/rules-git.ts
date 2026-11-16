@@ -1,6 +1,6 @@
 import { parseArgs, type ParsedArgs, type ParseSpec } from './command.ts';
 import { tokenize } from './tokenize.ts';
-import { ask, block, expandIn, type Ctx, type Decision, type ScanState } from './types.ts';
+import { ask, block, expandIn, IGNORED_LOSS, type Ctx, type Decision, type ScanState } from './types.ts';
 
 const PROTECTED = new Set(['main', 'master', 'production', 'prod']);
 const FORCE_FLAGS = ['--force', '-f', '--force-with-lease', '--force-if-includes', '--mirror'];
@@ -341,7 +341,7 @@ function destructive(call: GitCall, ctx: Ctx): Decision | null {
   const files = loss.scope === 'tracked' ? 'uncommitted changes' : 'untracked files';
   return block(
     'destructive-git-dirty',
-    `${loss.what} would destroy ${files}. Commit them or run "git stash push -u" first; the command is allowed once the worktree is clean.`,
+    `${loss.what} would destroy ${files}${loss.scope === 'ignored' ? IGNORED_LOSS : ''}. Commit them or run "git stash push -u" first; the command is allowed once the worktree is clean.`,
   );
 }
 

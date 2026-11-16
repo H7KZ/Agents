@@ -3,11 +3,13 @@ import { join } from 'node:path';
 
 export interface LogEntry {
   ts: string;
-  decision: 'block' | 'ask' | 'error' | 'disabled';
+  decision: 'block' | 'ask' | 'error' | 'disabled' | 'allow';
   rule: string;
   command: string;
   cwd: string;
   error?: string;
+  /** Recovery ref saved before an allowed destructive command. */
+  ref?: string;
 }
 
 const COMMAND_LIMIT = 500;

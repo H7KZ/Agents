@@ -1,5 +1,5 @@
 import assert from 'node:assert/strict';
-import { mkdirSync, readFileSync, symlinkSync, writeFileSync } from 'node:fs';
+import { mkdirSync, readFileSync, rmSync, symlinkSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { describe, it } from 'node:test';
 import { cleanupTmp, git, initRepo, runNode, tmpDir } from '../../scripts/test/helpers.ts';
@@ -63,17 +63,52 @@ describe('guard.ts as a hook subprocess', () => {
     assert.equal(guard('git push -f origin other', clone).status, 0);
   });
 
-  it('blocks destructive commands only when the worktree is dirty', () => {
+  it('snapshots then allows destructive commands when the worktree is dirty', () => {
     const repo = initRepo(tmpDir());
-    assert.equal(guard('git reset --hard', repo).status, 0);
+    assert.equal(guard('git reset --hard', repo).stderr, '');
     writeFileSync(join(repo, 'README.md'), 'edited\n');
     const run = guard('git reset --hard', repo);
-    assert.equal(run.status, 2);
-    assert.match(run.stderr, /destructive-git-dirty/);
+    assert.equal(run.status, 0);
+    assert.match(run.stderr, /saved a recovery snapshot as refs\/h7\/backup\/\d{8}T\d{6}Z-001/);
     const drop = guard('git -C . stash drop', repo);
     assert.equal(drop.status, 0);
     assert.match(drop.stdout, /git-stash-drop/);
     assert.equal(guard('git status', repo).status, 0);
+  });
+
+  it('the snapshot holds tracked edits and untracked files, leaves worktree and index alone, and restores', () => {
+    const repo = initRepo(tmpDir());
+    writeFileSync(join(repo, 'README.md'), 'edited\n');
+    writeFileSync(join(repo, 'new.txt'), 'untracked\n');
+    writeFileSync(join(repo, '.gitignore'), 'skip.log\n');
+    writeFileSync(join(repo, 'skip.log'), 'ignored\n');
+    const before = git(repo, 'status', '--porcelain', '--ignored');
+    const run = guard('git reset --hard', repo);
+    assert.equal(run.status, 0);
+    const ref = /(refs\/h7\/backup\/\S+)/.exec(run.stderr)?.[1] as string;
+    assert.ok(run.stderr.includes(`git restore --source=${ref} --worktree -- .`));
+    assert.equal(git(repo, 'status', '--porcelain', '--ignored'), before);
+    assert.equal(git(repo, 'show', `${ref}:README.md`), 'edited\n');
+    assert.equal(git(repo, 'show', `${ref}:new.txt`), 'untracked\n');
+    assert.throws(() => git(repo, 'show', `${ref}:skip.log`));
+    assert.match(git(repo, 'log', '-1', '--format=%s', ref), /^h7 backup before: git reset --hard/);
+    assert.equal(git(repo, 'rev-parse', `${ref}^`), git(repo, 'rev-parse', 'HEAD'));
+    assert.deepEqual(logLines(run.home).map((l) => [l.decision, l.rule, l.ref]), [['allow', 'destructive-git-snapshot', ref]]);
+    git(repo, 'reset', '--hard', '-q');
+    rmSync(join(repo, 'new.txt'));
+    assert.equal(readFileSync(join(repo, 'README.md'), 'utf8'), '# fixture\n');
+    git(repo, 'restore', `--source=${ref}`, '--worktree', '--', '.');
+    assert.equal(readFileSync(join(repo, 'README.md'), 'utf8'), 'edited\n');
+    assert.equal(readFileSync(join(repo, 'new.txt'), 'utf8'), 'untracked\n');
+  });
+
+  it('keeps the block when the snapshot cannot be taken (no commit yet)', () => {
+    const repo = tmpDir();
+    git(repo, 'init', '-q', '-b', 'main');
+    writeFileSync(join(repo, 'a.txt'), 'x\n');
+    git(repo, 'add', 'a.txt');
+    writeFileSync(join(repo, 'a.txt'), 'y\n');
+    assert.equal(decision(guard('git reset --hard', repo)), 'block');
   });
 
   it('blocks committing staged secrets and allows examples', () => {
@@ -162,27 +197,28 @@ describe('guard.ts as a hook subprocess', () => {
     git(repo, 'add', 'a.txt');
     git(repo, 'commit', '-q', '-m', 'a');
     writeFileSync(join(repo, 'a.txt'), 'edited\n');
-    assert.equal(decision(guard('git reset --hard', repo)), 'block');
+    assert.equal(decision(guard('git reset --hard', repo)), 'allow');
     writeFileSync(join(repo, '.git', 'index'), 'garbage');
     assert.equal(decision(guard('git reset --hard', repo)), 'ask');
     assert.equal(decision(guard('git commit -m x', repo)), 'ask');
   });
 
-  it('untracked files do not block reset --hard but do block git clean', () => {
+  it('untracked files are snapshotted before git clean, but git clean -x (ignored files) still blocks', () => {
     const repo = initRepo(tmpDir());
     writeFileSync(join(repo, 'new.log'), 'x\n');
     assert.equal(decision(guard('git reset --hard', repo)), 'allow');
     assert.equal(decision(guard('git checkout .', repo)), 'allow');
-    assert.equal(decision(guard('git clean -fd', repo)), 'block');
+    assert.equal(decision(guard('git clean -fd', repo)), 'allow');
+    assert.equal(decision(guard('git clean -fdx', repo)), 'block');
     assert.equal(decision(guard('git stash push -u && git clean -fd', repo)), 'allow');
   });
 
-  it('git checkout of paths on a modified tree is blocked, branch switches are not', () => {
+  it('git checkout of paths on a modified tree is snapshotted, branch switches need nothing', () => {
     const repo = initRepo(tmpDir());
     writeFileSync(join(repo, 'README.md'), 'edited\n');
     git(repo, 'branch', 'other');
-    assert.equal(decision(guard('git checkout README.md', repo)), 'block');
-    assert.equal(decision(guard('git checkout HEAD README.md', repo)), 'block');
+    assert.equal(decision(guard('git checkout README.md', repo)), 'allow');
+    assert.equal(decision(guard('git checkout HEAD README.md', repo)), 'allow');
     assert.equal(decision(guard('git checkout other', repo)), 'allow');
   });
 
