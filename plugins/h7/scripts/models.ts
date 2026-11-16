@@ -1,4 +1,4 @@
-import { existsSync, readFileSync } from 'node:fs';
+import { existsSync, readFileSync, statSync } from 'node:fs';
 import { homedir } from 'node:os';
 import path from 'node:path';
 
@@ -146,7 +146,7 @@ if (import.meta.main) {
     platform: process.platform,
     pathVar: [process.env.PATH].join(''), // join turns an unset PATH into '' without a branch some platforms never take
     read: realRead,
-    exists: existsSync,
+    exists: (file) => existsSync(file) && statSync(file).isFile(),
   };
   process.exitCode = main(process.argv.slice(2), (t) => console.log(t), (t) => console.error(t), env);
 }
