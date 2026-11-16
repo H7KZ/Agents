@@ -169,11 +169,14 @@ export function findModels(root: string, dir: string): Found[] {
   const found: Found[] = [];
   for (const name of readdirSync(base).sort()) {
     const file = join(base, name, MODEL_FILE);
+    const entry = safeLstat(join(base, name)) as Stats; // listed a moment ago; a vanished entry surfaces as an error
+    if (!entry.isSymbolicLink() && !entry.isDirectory()) continue;
     const stat = safeLstat(file);
-    if (stat === null || safeLstat(join(base, name))?.isSymbolicLink() === true) continue;
     let raw: unknown = null;
     let readError: string | null = null;
-    if (stat.isSymbolicLink() || !stat.isFile()) readError = `${MODEL_FILE} is not a regular file`;
+    if (entry.isSymbolicLink()) readError = 'model directory is a symlink: not followed';
+    else if (stat === null) readError = `${MODEL_FILE} is missing`;
+    else if (stat.isSymbolicLink() || !stat.isFile()) readError = `${MODEL_FILE} is not a regular file`;
     else {
       try {
         raw = JSON.parse(readFileSync(file, 'utf8'));
@@ -217,7 +220,9 @@ export function checkModels(repo: Repo, dir: string, found: Found[]): Report[] {
   });
 }
 
+/** Exit code: 2 any invalid model, 1 drift, unknown sync or no model at all (nothing checked is not in sync), else 0. */
 export function overall(reports: Report[]): number {
+  if (reports.length === 0) return 1;
   if (reports.some((r) => r.status === 'invalid')) return 2;
   return reports.every((r) => r.status === 'in-sync') ? 0 : 1;
 }
@@ -258,7 +263,7 @@ export function main(argv: string[], env: Env): number {
     const found = findModels(root, dir);
     if (cmd === 'check') {
       const reports = checkModels(repo, dir, found);
-      env.out(JSON.stringify({ dir, head: reports.length === 0 ? null : git(repo, ['rev-parse', 'HEAD']).trim(), models: reports }));
+      env.out(JSON.stringify({ dir, ...(reports.length === 0 ? { status: 'no-models' } : {}), head: reports.length === 0 ? null : git(repo, ['rev-parse', 'HEAD']).trim(), models: reports }));
       return overall(reports);
     }
     const [name] = rest as [string];

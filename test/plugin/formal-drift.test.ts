@@ -158,7 +158,7 @@ describe('diff parsing', () => {
   });
   it('overall: invalid beats drift beats in-sync', () => {
     const r = (status: Report['status']): Report => ({ name: 'n', status, changes: [], modelEdited: false, errors: [] });
-    assert.deepEqual([[], [r('in-sync')], [r('in-sync'), r('drifted')], [r('unknown-sync')], [r('drifted'), r('invalid')]].map(overall), [0, 0, 1, 1, 2]);
+    assert.deepEqual([[], [r('in-sync')], [r('in-sync'), r('drifted')], [r('unknown-sync')], [r('drifted'), r('invalid')]].map(overall), [1, 0, 1, 1, 2]);
   });
 });
 
@@ -166,6 +166,7 @@ describe('findModels', () => {
   it('reads one level of model.json files and never follows links', () => {
     const root = repoWith({ a: model({ name: 'a' }), broken: '{', empty: '' });
     mkdirSync(join(root, 'docs/formal/nomodel'));
+    writeFileSync(join(root, 'docs/formal/README.md'), '# models');
     mkdirSync(join(root, 'docs/formal/dirmodel/model.json'), { recursive: true });
     symlinkSync(tmpDir(), join(root, 'docs/formal/linked'), 'junction');
     const found = findModels(root, 'docs/formal');
@@ -174,6 +175,8 @@ describe('findModels', () => {
       ['broken', 'model.json is not valid JSON'],
       ['dirmodel', 'model.json is not a regular file'],
       ['empty', 'model.json is not valid JSON'],
+      ['linked', 'model directory is a symlink: not followed'],
+      ['nomodel', 'model.json is missing'],
     ]);
     assert.equal(found[0]?.file, 'docs/formal/a/model.json');
     assert.deepEqual(findModels(root, 'docs/missing'), []);
@@ -240,7 +243,13 @@ describe('main', () => {
     assert.equal(run(root, ['check'], fakeRunner({ diff: z('M', 'src/index.ts') }).run).code, 1);
     assert.equal(run(repoWith({ queue: model({ sources: ['nothing/**'] }) }), ['check'], fakeRunner().run).code, 2);
     const none = run(repoWith({}), ['check'], fakeRunner().run);
-    assert.deepEqual([none.code, JSON.parse(none.out)], [0, { dir: 'docs/formal', head: null, models: [] }]);
+    assert.deepEqual([none.code, JSON.parse(none.out)], [1, { dir: 'docs/formal', status: 'no-models', head: null, models: [] }]);
+    assert.equal(run(root, ['check', '--dir', 'docs/typo'], fakeRunner().run).code, 1);
+    assert.equal(JSON.parse(run(root, ['check', '--dir', 'docs/typo'], fakeRunner().run).out).status, 'no-models');
+    const linkedOnly = repoWith({});
+    mkdirSync(join(linkedOnly, 'docs/formal'), { recursive: true });
+    symlinkSync(tmpDir(), join(linkedOnly, 'docs/formal/q'), 'junction');
+    assert.equal(run(linkedOnly, ['check'], fakeRunner().run).code, 2);
     assert.equal(JSON.parse(run(root, ['check', '--dir', 'docs/formal'], fakeRunner().run).out).dir, 'docs/formal');
   });
 
