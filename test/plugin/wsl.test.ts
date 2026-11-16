@@ -158,6 +158,40 @@ describe('workspace scratch directory', () => {
     assert.deepEqual(scratchDirs(c.ws, realFsIo, c.home), [join(realpathSync(c.ws), 'tmp')]);
   });
 
+  it('property: scratch never allows a delete the plain rule refuses outside it', () => {
+    const { ws, home, ctx } = setup({ version: 1, scratch: 'tmp', repos: { web: {} } });
+    const plain: Ctx = { ...ctx, tmp: { dirs: [] } };
+    const scratch = join(realpathSync(ws), 'tmp');
+    const starts = ['', '/web', '/tmp', '/tmp/a', '/other', '/tmp/../web', '/tmpx', '/Tmp/a', '/tmp/./a/../..', '/web/../tmp', '/..'];
+    const tails = fc.array(fc.constantFrom('', 'a', '..', 'a/b', '.', '*', 'tmp'), { maxLength: 3 });
+    fc.assert(
+      fc.property(fc.constantFrom(...starts), tails, (start, tail) => {
+        const target = `${fwd(ws)}${start}/${tail.join('/')}`;
+        const command = `rm -rf ${target}`;
+        const inside = (() => {
+          const globAt = tail.findIndex((part) => /[*?[]/.test(part));
+          const kept = globAt === -1 ? tail : tail.slice(0, globAt);
+          const rel = join(realpathSync(ws), start.replace(/^\//, ''), ...kept).split('\\').join('/');
+          const norm = rel.replace(/\/\.(?=\/|$)/g, '');
+          const parts: string[] = [];
+          for (const part of norm.split('/')) {
+            if (part === '..') parts.pop();
+            else parts.push(part);
+          }
+          const resolved = parts.join('/');
+          const root = scratch.split('\\').join('/');
+          const lower = resolved.toLowerCase();
+          return lower.startsWith(`${root.toLowerCase()}/`) || (globAt !== -1 && lower === root.toLowerCase());
+        })();
+        const without = rule(plain, command);
+        if (!inside) assert.equal(rule(ctx, command), without, command);
+        else assert.ok(rule(ctx, command) === null || rule(ctx, command) === without, command);
+      }),
+      { numRuns: runs(200) },
+    );
+    assert.ok(home.length > 0);
+  });
+
   it('looks the scratch dir up once, and only when read', () => {
     let calls = 0;
     const counting = { ...realFsIo, lstat: (file: string) => { calls += 1; return realFsIo.lstat(file); } };

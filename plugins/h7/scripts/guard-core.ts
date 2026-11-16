@@ -113,8 +113,17 @@ const RUNS_PATH = /[\\/]\.h7[\\/]runs(?:[\\/]|$)/i;
 const RUNS_MENTION = /\.h7[\\/]+["']?runs(?![\w.-])/i;
 // Anything that can change a file; a mere read (ls, cat, Get-Content) of the journal stays allowed.
 const WRITE_WORDS = />|\b(?:tee|rm|rmdir|mv|cp|ln|sed|awk|perl|python3?|node|truncate|dd|install|del|erase|ren|rename|touch|chmod|set-content|add-content|out-file|clear-content|remove-item|move-item|copy-item|new-item|rename-item|sc|ac|ri|mi|ci|ni)\b/i;
+// The workspace marker is guard policy too (its scratch list widens what deletes may touch): any spelling of its name, quoted, globbed or as an
+// 8.3 short name. Shell commands are refused only together with a write-ish word or redirect, so reading it stays possible.
+const MARKER_NAME = /h7["']*-["']*(?:w["']*o["']*r["']*k|[*?[])|h7-wor~\d/i;
+const MARKER_REASON =
+  'The h7 workspace marker (.h7-workspace.json) is guard policy: its scratch list widens what deletes may touch and it sets ship defaults. Agents must not change it. Ask the user to edit it.';
 const CONFIG_REASON =
   'h7 guard state in ~/.h7 (ask-mode config, guard log) is owner-only: agents must not change their own guard policy. Ask the user to edit it.';
+
+function markerBlock(note = ''): GuardResult {
+  return { code: 2, stdout: '', stderr: `h7 guard blocked [workspace-marker]: ${MARKER_REASON}${note}\n` };
+}
 
 function configBlock(note = ''): GuardResult {
   return { code: 2, stdout: '', stderr: `h7 guard blocked [guard-config]: ${CONFIG_REASON}${note}
@@ -188,6 +197,10 @@ export function run(stdinText: string, env: Record<string, string | undefined>, 
       const base = typeof input.cwd === 'string' && input.cwd !== '' ? input.cwd : io.fallbackCwd;
       const dir = paths.resolve(paths.resolve(base, home), '.h7');
       const resolved = paths.resolve(base, target);
+      if (MARKER_NAME.test(target) || MARKER_NAME.test(resolved)) {
+        const logError = appendLog(home, entry('block', 'workspace-marker', target, base));
+        return markerBlock(logError === null ? '' : ` (could not write guard log: ${logError})`);
+      }
       if (!paths.isInside(dir, resolved) && !CONFIG_NAME.test(target)) {
         if (!RUNS_PATH.test(resolved) || !isUnattended(env, base, probe)) return ALLOW;
         return journalBlock(appendLog(home, entry('block', 'unattended-journal', target, base)));
@@ -205,6 +218,10 @@ export function run(stdinText: string, env: Record<string, string | undefined>, 
       return configBlock(logError === null ? '' : ` (could not write guard log: ${logError})`);
     }
     cwd = typeof input.cwd === 'string' && input.cwd !== '' ? input.cwd : io.fallbackCwd;
+    if (MARKER_NAME.test(text) && WRITE_WORDS.test(text)) {
+      const logError = appendLog(home, entry('block', 'workspace-marker', text, cwd));
+      return markerBlock(logError === null ? '' : ` (could not write guard log: ${logError})`);
+    }
     if (RUNS_MENTION.test(text) && WRITE_WORDS.test(text) && unattended()) return journalBlock(appendLog(home, entry('block', 'unattended-journal', text, cwd)));
     const platform = io.platform === 'win32' ? 'win32' : 'posix';
     const paths = makePaths(platform, io.realpath);
